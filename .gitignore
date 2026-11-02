@@ -5,14 +5,20 @@ dist-electron/
 release/
 out/
 coverage/
+scratch/
 .DS_Store
 *.log
 .env*
 !.env.example
 
-# SQLite and local database files
+# Large executables and installers
+*.exe
+
+# SQLite and local database files & backups
 *.db
 *.db-journal
 *.db-wal
 *.db-shm
-
+data/backups/
+data/pos_database.db*
+data/uploads/

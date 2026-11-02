@@ -1,0 +1,19 @@
+{
+  "short_name": "KFD POS",
+  "name": "KIID FROM DREAM POS & Inventory Management System",
+  "description": "Multi-Tenant Offline-First Hybrid Point of Sale and Inventory Management System",
+  "icons": [
+    {
+      "src": "/placeholder-product.svg",
+      "type": "image/svg+xml",
+      "sizes": "192x192 512x512",
+      "purpose": "any maskable"
+    }
+  ],
+  "start_url": "/",
+  "background_color": "#0f172a",
+  "theme_color": "#0f172a",
+  "display": "standalone",
+  "orientation": "any",
+  "categories": ["business", "finance", "productivity"]
+}

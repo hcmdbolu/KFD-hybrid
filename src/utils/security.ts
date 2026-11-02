@@ -163,39 +163,65 @@ const SECRET_APP_KEY = (typeof process !== 'undefined' && process.env && process
 
 /**
  * Generates a signed bearer session token for authenticated API requests
- * Format: staffId.role.expiresAt.signature
+ * Format: storeId.staffId.role.expiresAt.signature
  */
-export function createSessionToken(staffId: string, role: string, ttlHours: number = 14): string {
+export function createSessionToken(
+  staffId: string, 
+  role: string, 
+  storeId: string = 'store_default',
+  ttlHours: number = 14
+): string {
   const expiresAt = Date.now() + ttlHours * 60 * 60 * 1000;
-  const payload = `${staffId}.${role}.${expiresAt}`;
+  const payload = `${storeId}.${staffId}.${role}.${expiresAt}`;
   const signature = sha256(`${payload}.${SECRET_APP_KEY}`).slice(0, 32);
   return `${payload}.${signature}`;
 }
 
 /**
- * Validates a session token
+ * Validates a session token and extracts storeId, staffId, and role
  */
-export function verifySessionToken(token: string): { valid: boolean; staffId?: string; role?: string; error?: string } {
+export function verifySessionToken(token: string): { 
+  valid: boolean; 
+  storeId?: string;
+  staffId?: string; 
+  role?: string; 
+  error?: string 
+} {
   if (!token || typeof token !== 'string') {
     return { valid: false, error: 'No token provided' };
   }
 
   const parts = token.split('.');
-  if (parts.length !== 4) {
-    return { valid: false, error: 'Malformed token structure' };
+  if (parts.length === 5) {
+    const [storeId, staffId, role, expiresAtStr, signature] = parts;
+    const expiresAt = Number(expiresAtStr);
+
+    if (isNaN(expiresAt) || Date.now() > expiresAt) {
+      return { valid: false, error: 'Session token has expired' };
+    }
+
+    const expectedSignature = sha256(`${storeId}.${staffId}.${role}.${expiresAt}.${SECRET_APP_KEY}`).slice(0, 32);
+    if (!timingSafeEqual(signature, expectedSignature)) {
+      return { valid: false, error: 'Invalid token signature' };
+    }
+
+    return { valid: true, storeId, staffId, role };
+  } else if (parts.length === 4) {
+    // Backward-compatible verification for legacy 4-part tokens
+    const [staffId, role, expiresAtStr, signature] = parts;
+    const expiresAt = Number(expiresAtStr);
+
+    if (isNaN(expiresAt) || Date.now() > expiresAt) {
+      return { valid: false, error: 'Session token has expired' };
+    }
+
+    const expectedSignature = sha256(`${staffId}.${role}.${expiresAt}.${SECRET_APP_KEY}`).slice(0, 32);
+    if (!timingSafeEqual(signature, expectedSignature)) {
+      return { valid: false, error: 'Invalid token signature' };
+    }
+
+    return { valid: true, storeId: 'store_default', staffId, role };
   }
 
-  const [staffId, role, expiresAtStr, signature] = parts;
-  const expiresAt = Number(expiresAtStr);
-
-  if (isNaN(expiresAt) || Date.now() > expiresAt) {
-    return { valid: false, error: 'Session token has expired' };
-  }
-
-  const expectedSignature = sha256(`${staffId}.${role}.${expiresAt}.${SECRET_APP_KEY}`).slice(0, 32);
-  if (!timingSafeEqual(signature, expectedSignature)) {
-    return { valid: false, error: 'Invalid token signature' };
-  }
-
-  return { valid: true, staffId, role };
+  return { valid: false, error: 'Malformed token structure' };
 }

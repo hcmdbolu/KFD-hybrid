@@ -9,10 +9,24 @@
     <meta property="og:description" content="Comprehensive Point of Sale (POS) system for retail stores, supermarkets, and distributors featuring real-time inventory tracking, flexible item measurement, and sales processing." />
     <meta property="og:type" content="website" />
     <meta name="twitter:card" content="summary_large_image" />
+    <meta name="theme-color" content="#0f172a" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="KFD POS" />
+    <link rel="manifest" href="/manifest.json" />
   </head>
   <body>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
+    <script>
+      if ('serviceWorker' in navigator && window.location.protocol.startsWith('http')) {
+        window.addEventListener('load', () => {
+          navigator.serviceWorker.register('/sw.js')
+            .then(reg => console.log('[PWA] Service Worker registered successfully:', reg.scope))
+            .catch(err => console.warn('[PWA] Service Worker registration skipped or failed:', err));
+        });
+      }
+    </script>
   </body>
 </html>
 

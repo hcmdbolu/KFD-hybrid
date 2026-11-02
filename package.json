@@ -1,7 +1,7 @@
 {
   "name": "kiidfromdream-pos",
   "private": true,
-  "version": "1.0.8",
+  "version": "2.4.0",
   "description": "KIID FROM DREAM POS & Inventory System",
   "author": "Alex Abiri",
   "type": "module",
@@ -19,9 +19,12 @@
     "electron:dev": "concurrently -k \"tsx --experimental-sqlite server.ts\" \"wait-on tcp:3000 && electron .\"",
     "electron:build": "npm run build:all && electron-builder --dir",
     "electron:dist": "npm run build:all && electron-builder",
-    "dist": "npm run electron:dist"
+    "dist": "npm run electron:dist",
+    "migrate:pg": "tsx scripts/migrate-sqlite-to-pg.ts"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.758.0",
+    "@aws-sdk/s3-request-presigner": "^3.758.0",
     "@google/genai": "^2.4.0",
     "@tailwindcss/vite": "^4.3.3",
     "@vitejs/plugin-react": "^6.1.1",
@@ -29,6 +32,7 @@
     "express": "^4.21.2",
     "lucide-react": "^0.546.0",
     "motion": "^12.23.24",
+    "pg": "^8.13.3",
     "react": "^19.0.1",
     "react-dom": "^19.0.1",
     "vite": "^8.3.0"
@@ -36,6 +40,7 @@
   "devDependencies": {
     "@types/express": "^4.17.21",
     "@types/node": "^22.14.0",
+    "@types/pg": "^8.11.11",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "autoprefixer": "^10.4.21",

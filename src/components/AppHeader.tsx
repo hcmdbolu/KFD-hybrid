@@ -1,18 +1,25 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { usePos } from '../context/PosContext';
 import { 
   Menu, 
   Clock, 
   AlertTriangle, 
-  Database, 
   RefreshCw, 
   Radio, 
   LockKeyhole,
-  CheckCircle2,
   PanelLeftOpen,
-  PanelLeftClose
+  PanelLeftClose,
+  LayoutDashboard,
+  ShoppingCart,
+  Building2,
+  Plus,
+  ChevronDown,
+  Check,
+  Cloud,
+  CloudOff
 } from 'lucide-react';
 import { ROLE_BADGES } from '../utils/rbac';
+import { TenantConfig } from '../types';
 
 interface AppHeaderProps {
   currentTab: string;
@@ -20,6 +27,7 @@ interface AppHeaderProps {
   sidebarHidden?: boolean;
   onToggleSidebar?: () => void;
   onToggleMobileMenu: () => void;
+  onOpenNewBusinessModal?: () => void;
 }
 
 const TAB_TITLES: Record<string, { title: string; subtitle: string }> = {
@@ -29,7 +37,7 @@ const TAB_TITLES: Record<string, { title: string; subtitle: string }> = {
   },
   inventory: {
     title: 'Inventory & Stock Management',
-    subtitle: 'Real-time cold-room stock levels, batch expiries, reorder thresholds, and cycle counts.',
+    subtitle: 'Real-time inventory levels, batch expiries, reorder thresholds, and cycle counts.',
   },
   sales: {
     title: 'Sales History & Void Ledger',
@@ -41,7 +49,7 @@ const TAB_TITLES: Record<string, { title: string; subtitle: string }> = {
   },
   suppliers: {
     title: 'Suppliers & Purchase Orders',
-    subtitle: 'Fish farms, vessel vendors, receiving goods inspections, and supply chain tracking.',
+    subtitle: 'Vendors, suppliers, receiving goods inspections, and supply chain tracking.',
   },
   reports: {
     title: 'Executive Financial & P&L Reports',
@@ -50,6 +58,10 @@ const TAB_TITLES: Record<string, { title: string; subtitle: string }> = {
   audit: {
     title: 'Cryptographic Audit Trail Ledger',
     subtitle: 'SHA-256 tamper-evident system logs, security overrides, and operational event history.',
+  },
+  treasury: {
+    title: 'Cash Drawer & Treasury / Bank Management',
+    subtitle: 'Unified cash till management, bank accounts, wireless POS terminals, and bidirectional fund transfers.',
   },
   reconciliation: {
     title: 'Cash Drawer Reconciliation & Bank Treasury',
@@ -63,6 +75,10 @@ const TAB_TITLES: Record<string, { title: string; subtitle: string }> = {
     title: 'Staff & Role Security Administration',
     subtitle: 'Standard enterprise RBAC, staff credentials, security PINs, and shift scheduling.',
   },
+  cycle_count: {
+    title: 'Physical Stock Cycle Count & Variance Audit',
+    subtitle: 'Periodic physical inventory auditing, scale calibration, and immediate stock reconciliation ledger.',
+  },
   receipt_settings: {
     title: 'Receipt & Branding Customization',
     subtitle: 'Configure store logo, contact info, thermal roll width, tax registration, and customer return policies.',
@@ -75,15 +91,18 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   sidebarHidden = false,
   onToggleSidebar,
   onToggleMobileMenu,
+  onOpenNewBusinessModal,
 }) => {
   const { 
     activeStaff, 
     lowStockCount, 
     expiringSoonCount, 
-    syncStatus, 
-    lastSyncTime, 
-    serverVersion, 
+    currentStoreId,
+    setCurrentStoreId,
+    syncEngineStatus,
+    triggerOutboxFlush,
     forceSync,
+    receiptSettings,
     recentBroadcastNotice,
     clearBroadcastNotice,
     lockTerminal,
@@ -91,6 +110,11 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   } = usePos();
 
   const [currentTime, setCurrentTime] = useState<string>('');
+  const [isStoreDropdownOpen, setIsStoreDropdownOpen] = useState(false);
+  const [tenantsList, setTenantsList] = useState<TenantConfig[]>([]);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
+  const isCashier = activeStaff.role === 'Cashier';
 
   useEffect(() => {
     const updateTime = () => {
@@ -111,12 +135,44 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
     return () => clearInterval(timer);
   }, []);
 
+  // Fetch tenants list for switcher dropdown
+  useEffect(() => {
+    const fetchTenants = async () => {
+      try {
+        const res = await fetch('/api/v1/tenants');
+        if (res.ok) {
+          const data = await res.json();
+          if (data && Array.isArray(data.tenants)) {
+            setTenantsList(data.tenants);
+          }
+        }
+      } catch (err) {
+        console.warn('Failed to load tenants list:', err);
+      }
+    };
+    fetchTenants();
+  }, [currentStoreId]);
+
+  // Click outside listener for store dropdown
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+        setIsStoreDropdownOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
   const meta = TAB_TITLES[currentTab] || {
     title: 'KiidFromDream POS',
-    subtitle: 'Fish & Seafood Counter Management',
+    subtitle: 'Retail Counter & Point of Sale Management',
   };
 
   const roleBadge = ROLE_BADGES[activeStaff.role] || ROLE_BADGES.Cashier;
+
+  const currentTenantObj = tenantsList.find(t => t.store_id === currentStoreId);
+  const storeDisplayName = receiptSettings?.business_name || currentTenantObj?.business_name || (currentStoreId === 'store_default' ? 'Main Store' : currentStoreId);
 
   return (
     <div className="bg-white border-b border-slate-200 sticky top-0 z-30 shadow-xs">
@@ -138,7 +194,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
       )}
 
       {/* Main Bar */}
-      <div className="px-4 sm:px-6 lg:px-8 py-3 flex items-center justify-between gap-4">
+      <div className="px-4 sm:px-6 lg:px-8 py-2.5 flex items-center justify-between gap-3">
         {/* Left: Sidebar Toggle Button + Module Title */}
         <div className="flex items-center space-x-3 min-w-0">
           <button
@@ -166,48 +222,184 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
           </button>
 
           <div className="min-w-0">
-            <h1 className="text-base sm:text-lg font-bold text-slate-900 leading-tight truncate">
-              {meta.title}
-            </h1>
+            <div className="flex items-center gap-2">
+              <h1 className="text-base sm:text-lg font-bold text-slate-900 leading-tight truncate">
+                {meta.title}
+              </h1>
+
+              {/* View Mode Switcher: POS Register vs Management Back-Office */}
+              {!isCashier && (
+                currentTab === 'pos' ? (
+                  <button
+                    type="button"
+                    onClick={() => setCurrentTab('reports')}
+                    className="hidden sm:inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-[11px] font-semibold border border-slate-700 shadow-xs transition-all"
+                    title="Switch to Management Dashboard"
+                  >
+                    <LayoutDashboard className="w-3.5 h-3.5 text-cyan-400" />
+                    <span>Management Dashboard</span>
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setCurrentTab('pos')}
+                    className="hidden sm:inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-bold border border-emerald-500 shadow-xs transition-all animate-pulse"
+                    title="Switch to Cashier POS Register"
+                  >
+                    <ShoppingCart className="w-3.5 h-3.5" />
+                    <span>Open Register</span>
+                  </button>
+                )
+              )}
+            </div>
             <p className="text-[11px] text-slate-500 truncate hidden sm:block">
               {meta.subtitle}
             </p>
           </div>
         </div>
 
-        {/* Right: Live Clock, DB Status, Alerts, Session */}
-        <div className="flex items-center space-x-2.5 text-xs shrink-0">
-          {/* Live Clock */}
-          <div className="hidden lg:flex items-center space-x-1.5 text-slate-600 bg-slate-100 px-3 py-1.5 rounded-xl border border-slate-200/80 font-mono text-[11px]">
-            <Clock className="w-3.5 h-3.5 text-emerald-600" />
-            <span>{currentTime || '25 Sep 2026'}</span>
+        {/* Right Controls: Store Selector, Sync Badge, Alerts, Staff, Screen Lock */}
+        <div className="flex items-center space-x-2 text-xs shrink-0">
+          {/* Active Store / Tenant Dropdown */}
+          <div className="relative" ref={dropdownRef}>
+            <button
+              type="button"
+              onClick={() => setIsStoreDropdownOpen(!isStoreDropdownOpen)}
+              className="flex items-center space-x-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 px-2.5 py-1.5 rounded-xl border border-slate-200 text-[11px] font-medium transition-colors"
+              title="Active Business Store / Tenant"
+            >
+              <Building2 className="w-3.5 h-3.5 text-cyan-600 shrink-0" />
+              <span className="font-semibold max-w-[120px] truncate">{storeDisplayName}</span>
+              <ChevronDown className="w-3 h-3 text-slate-500 shrink-0" />
+            </button>
+
+            {isStoreDropdownOpen && (
+              <div className="absolute right-0 mt-1.5 w-64 bg-slate-900 border border-slate-700 rounded-xl shadow-2xl p-2 z-50 animate-fadeIn text-xs">
+                <div className="px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-slate-400 border-b border-slate-800 mb-1">
+                  Active Stores & Branches
+                </div>
+                
+                <div className="max-h-48 overflow-y-auto space-y-1">
+                  {tenantsList.length === 0 ? (
+                    <div
+                      onClick={() => {
+                        setCurrentStoreId('store_default');
+                        setIsStoreDropdownOpen(false);
+                      }}
+                      className="flex items-center justify-between p-2 rounded-lg bg-slate-800 text-white cursor-pointer"
+                    >
+                      <div>
+                        <div className="font-semibold">{storeDisplayName}</div>
+                        <div className="text-[10px] text-cyan-400 font-mono">store_default</div>
+                      </div>
+                      <Check className="w-4 h-4 text-emerald-400" />
+                    </div>
+                  ) : (
+                    tenantsList.map(t => {
+                      const isCurrent = t.store_id === currentStoreId;
+                      return (
+                        <div
+                          key={t.store_id}
+                          onClick={() => {
+                            setCurrentStoreId(t.store_id);
+                            triggerOutboxFlush();
+                            forceSync();
+                            setIsStoreDropdownOpen(false);
+                          }}
+                          className={`flex items-center justify-between p-2 rounded-lg cursor-pointer transition-colors ${
+                            isCurrent ? 'bg-cyan-950/80 border border-cyan-500/50 text-white' : 'hover:bg-slate-800 text-slate-300'
+                          }`}
+                        >
+                          <div className="min-w-0 pr-2">
+                            <div className="font-semibold truncate">{t.business_name}</div>
+                            <div className="text-[10px] text-slate-400 font-mono truncate">
+                              {t.store_id} • {t.vertical}
+                            </div>
+                          </div>
+                          {isCurrent && <Check className="w-4 h-4 text-cyan-400 shrink-0" />}
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+
+                {['Admin', 'Super Admin'].includes(activeStaff.role) && onOpenNewBusinessModal && (
+                  <div className="mt-2 pt-1.5 border-t border-slate-800">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsStoreDropdownOpen(false);
+                        onOpenNewBusinessModal();
+                      }}
+                      className="w-full flex items-center justify-center gap-1.5 py-2 px-3 rounded-lg bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white font-semibold text-[11px] shadow-sm transition-all"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>Register New Store / Branch</span>
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
-          {/* Central DB Sync Pill */}
+          {/* Hybrid Offline-First Sync Pill */}
           <div 
-            className="hidden sm:flex items-center space-x-1.5 bg-slate-100 text-slate-700 px-2.5 py-1.5 rounded-xl border border-slate-200 text-[11px] font-mono"
-            title={`Central Database: ${syncStatus}. Version: ${serverVersion}. Last sync: ${lastSyncTime}`}
+            className="flex items-center space-x-1.5 bg-slate-100 text-slate-700 px-2.5 py-1.5 rounded-xl border border-slate-200 text-[11px] font-mono cursor-pointer hover:bg-slate-200/80 transition-colors"
+            onClick={() => triggerOutboxFlush()}
+            title={
+              syncEngineStatus.isSyncing 
+                ? 'Syncing local outbox mutations to server...'
+                : !syncEngineStatus.isOnline 
+                  ? `Offline Mode: ${syncEngineStatus.pendingCount} local transactions queued in outbox. Click to retry.`
+                  : syncEngineStatus.pendingCount > 0
+                    ? `${syncEngineStatus.pendingCount} queued outbox mutations. Click to flush sync now.`
+                    : `Central DB Synced (v${syncEngineStatus.lastServerVersion}). Click to force delta pull.`
+            }
           >
             <span className="relative flex h-2 w-2">
               <span className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${
-                syncStatus === 'synced' ? 'bg-emerald-400' : syncStatus === 'syncing' ? 'bg-amber-400' : 'bg-rose-400'
+                !syncEngineStatus.isOnline 
+                  ? 'bg-rose-400' 
+                  : syncEngineStatus.isSyncing 
+                    ? 'bg-blue-400' 
+                    : syncEngineStatus.pendingCount > 0 
+                      ? 'bg-amber-400' 
+                      : 'bg-emerald-400'
               }`} />
               <span className={`relative inline-flex rounded-full h-2 w-2 ${
-                syncStatus === 'synced' ? 'bg-emerald-500' : syncStatus === 'syncing' ? 'bg-amber-500' : 'bg-rose-500'
+                !syncEngineStatus.isOnline 
+                  ? 'bg-rose-500' 
+                  : syncEngineStatus.isSyncing 
+                    ? 'bg-blue-500' 
+                    : syncEngineStatus.pendingCount > 0 
+                      ? 'bg-amber-500' 
+                      : 'bg-emerald-500'
               }`} />
             </span>
-            <Database className="w-3.5 h-3.5 text-emerald-600" />
-            <span className="font-semibold text-slate-800">
-              {syncStatus === 'synced' ? 'Central DB' : syncStatus === 'syncing' ? 'Syncing' : 'Offline'}
+
+            {syncEngineStatus.isOnline ? (
+              <Cloud className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+            ) : (
+              <CloudOff className="w-3.5 h-3.5 text-rose-500 shrink-0" />
+            )}
+
+            <span className="font-semibold text-slate-800 hidden sm:inline">
+              {syncEngineStatus.isSyncing 
+                ? 'Syncing' 
+                : !syncEngineStatus.isOnline 
+                  ? `Offline${syncEngineStatus.pendingCount > 0 ? ` (${syncEngineStatus.pendingCount})` : ''}` 
+                  : syncEngineStatus.pendingCount > 0 
+                    ? `Pending (${syncEngineStatus.pendingCount})` 
+                    : 'Synced'}
             </span>
-            <button
-              type="button"
-              onClick={() => forceSync()}
-              className="text-slate-400 hover:text-slate-700 p-0.5 rounded transition-colors"
-              title="Force Sync Server"
-            >
-              <RefreshCw className={`w-3 h-3 ${syncStatus === 'syncing' ? 'animate-spin text-emerald-600' : ''}`} />
-            </button>
+
+            <RefreshCw className={`w-3 h-3 text-slate-500 ${syncEngineStatus.isSyncing ? 'animate-spin text-cyan-600' : ''}`} />
+          </div>
+
+          {/* Live Clock */}
+          <div className="hidden xl:flex items-center space-x-1.5 text-slate-600 bg-slate-100 px-3 py-1.5 rounded-xl border border-slate-200/80 font-mono text-[11px]">
+            <Clock className="w-3.5 h-3.5 text-emerald-600" />
+            <span>{currentTime || '25 Sep 2026'}</span>
           </div>
 
           {/* Low Stock Alerts */}

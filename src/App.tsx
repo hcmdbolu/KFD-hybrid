@@ -15,13 +15,19 @@ import { LoginAuthModal } from './components/auth/LoginAuthModal';
 import { StaffManagerModal } from './components/admin/StaffManagerModal';
 import { StaffAndRolesManager } from './components/admin/StaffAndRolesManager';
 import { FactoryResetModal } from './components/admin/FactoryResetModal';
+import { BackupRestoreModal } from './components/admin/BackupRestoreModal';
+import { LegacyDataMigrationModal } from './components/admin/LegacyDataMigrationModal';
+import { BusinessOnboardingModal } from './components/auth/BusinessOnboardingModal';
 import { CashReconciliationManager } from './components/finance/CashReconciliationManager';
 import { PosTerminalSetupManager } from './components/pos/PosTerminalSetupManager';
+import { CashDrawerTreasuryManager } from './components/finance/CashDrawerTreasuryManager';
 import { CycleCountModal } from './components/inventory/CycleCountModal';
+import { CycleCountManager } from './components/inventory/CycleCountManager';
 import { StockTransferModal } from './components/inventory/StockTransferModal';
 import { ReceiptBrandingManager } from './components/admin/ReceiptBrandingManager';
+import { TerminalFleetManager } from './components/admin/TerminalFleetManager';
 import { SaleTransaction, UserRole } from './types';
-import { PanelLeftOpen } from 'lucide-react';
+import { PanelLeftOpen, Lock } from 'lucide-react';
 import { ErrorBoundary } from './components/common/ErrorBoundary';
 
 function MainApp() {
@@ -34,8 +40,12 @@ function MainApp() {
     isAuthModalOpen,
     authModalMode,
     closeLoginModal,
+    isBackupModalOpen,
+    closeBackupModal,
     isFactoryResetModalOpen,
     closeFactoryResetModal,
+    isRemoteLocked,
+    remoteLockReason,
   } = usePos();
 
   const [currentTab, setCurrentTab] = useState<string>('pos');
@@ -57,6 +67,13 @@ function MainApp() {
       localStorage.setItem('kiidfromdream_sidebar_hidden_v1', String(sidebarHidden));
     } catch {}
   }, [sidebarHidden]);
+
+  // SuperAdmin accounts are restricted from daily POS floor sales; redirect default landing to executive reports
+  useEffect(() => {
+    if (activeStaff.role === 'Super Admin' && currentTab === 'pos') {
+      setCurrentTab('reports');
+    }
+  }, [activeStaff.role, currentTab]);
 
   // Keyboard shortcut: [ or Ctrl+B to toggle side panel
   useEffect(() => {
@@ -91,6 +108,7 @@ function MainApp() {
   const [isCycleCountOpen, setIsCycleCountOpen] = useState(false);
   const [isStockTransferOpen, setIsStockTransferOpen] = useState(false);
   const [isStaffManagerOpen, setIsStaffManagerOpen] = useState(false);
+  const [isNewBusinessModalOpen, setIsNewBusinessModalOpen] = useState(false);
 
   // Cross-navigation states
   const [prefilledPo, setPrefilledPo] = useState<{ supplierId?: string; itemSn?: string }>({});
@@ -119,8 +137,8 @@ function MainApp() {
   useEffect(() => {
     const role = activeStaff.role;
     const restrictedTabsForRole: Record<UserRole, string[]> = {
-      Cashier: ['inventory', 'suppliers', 'reports', 'audit', 'staff', 'reconciliation', 'pos_setup', 'customers', 'receipt_settings'],
-      Supervisor: ['reports', 'audit', 'staff', 'reconciliation', 'pos_setup', 'receipt_settings'],
+      Cashier: ['inventory', 'suppliers', 'reports', 'audit', 'staff', 'treasury', 'reconciliation', 'pos_setup', 'customers', 'receipt_settings', 'fleet'],
+      Supervisor: ['reports', 'audit', 'staff', 'treasury', 'reconciliation', 'pos_setup', 'receipt_settings', 'fleet'],
       Manager: ['staff'],
       Admin: [],
       'Super Admin': [],
@@ -184,6 +202,7 @@ function MainApp() {
           sidebarHidden={sidebarHidden}
           onToggleSidebar={handleToggleSidebar}
           onToggleMobileMenu={() => setMobileMenuOpen(!mobileMenuOpen)}
+          onOpenNewBusinessModal={() => setIsNewBusinessModalOpen(true)}
         />
 
         {/* Main Tab Content */}
@@ -238,20 +257,28 @@ function MainApp() {
               <AuditLogManager />
             )}
 
-            {currentTab === 'reconciliation' && !isCashier && !isSupervisor && (
-              <CashReconciliationManager onOpenPosSetup={() => setCurrentTab('pos_setup')} />
+            {(currentTab === 'treasury' || currentTab === 'reconciliation') && !isCashier && !isSupervisor && (
+              <CashDrawerTreasuryManager initialTab="drawers" />
             )}
 
             {currentTab === 'pos_setup' && !isCashier && !isSupervisor && (
-              <PosTerminalSetupManager />
+              <CashDrawerTreasuryManager initialTab="terminals_banks" />
             )}
 
             {currentTab === 'receipt_settings' && !isCashier && !isSupervisor && (
               <ReceiptBrandingManager />
             )}
 
+            {currentTab === 'cycle_count' && !isCashier && (
+              <CycleCountManager />
+            )}
+
             {currentTab === 'staff' && !isCashier && !isSupervisor && (activeStaff.role === 'Admin' || activeStaff.role === 'Super Admin') && (
               <StaffAndRolesManager />
+            )}
+
+            {currentTab === 'fleet' && !isCashier && !isSupervisor && (
+              <TerminalFleetManager />
             )}
           </ErrorBoundary>
         </main>
@@ -288,10 +315,12 @@ function MainApp() {
       )}
 
       {/* Cycle Count Modal (Supervisor, Manager, Admin) */}
-      <CycleCountModal
-        isOpen={isCycleCountOpen}
-        onClose={() => setIsCycleCountOpen(false)}
-      />
+      <ErrorBoundary fallbackTitle="Cycle Count Error" fallbackMessage="Unable to render Cycle Count Modal.">
+        <CycleCountModal
+          isOpen={isCycleCountOpen}
+          onClose={() => setIsCycleCountOpen(false)}
+        />
+      </ErrorBoundary>
 
       {/* Stock Transfer Modal (Manager, Admin) */}
       <StockTransferModal
@@ -310,6 +339,43 @@ function MainApp() {
         isOpen={isFactoryResetModalOpen}
         onClose={closeFactoryResetModal}
       />
+
+      {/* Accessible Data Backup & Restore Modal (All Staff) */}
+      <BackupRestoreModal
+        isOpen={isBackupModalOpen}
+        onClose={closeBackupModal}
+      />
+
+      {/* Legacy Data Migration & Third-Party Import Module */}
+      <LegacyDataMigrationModal />
+
+      {/* New Multi-Tenant Business Onboarding Wizard */}
+      <BusinessOnboardingModal
+        isOpen={isNewBusinessModalOpen}
+        onClose={() => setIsNewBusinessModalOpen(false)}
+      />
+
+      {/* Remote Security Lockdown Screen */}
+      {isRemoteLocked && (
+        <div className="fixed inset-0 z-50 bg-slate-950/95 backdrop-blur-md flex items-center justify-center p-6 text-center select-none animate-fadeIn">
+          <div className="max-w-md w-full bg-slate-900 border border-rose-800/80 rounded-3xl p-8 shadow-2xl shadow-rose-950/60">
+            <div className="w-16 h-16 rounded-2xl bg-rose-600/20 border border-rose-500/40 text-rose-400 flex items-center justify-center mx-auto mb-5 shadow-lg shadow-rose-600/20">
+              <Lock className="w-8 h-8" />
+            </div>
+            <h2 className="text-2xl font-black text-white tracking-tight">TERMINAL LOCKED</h2>
+            <p className="text-xs text-rose-400 font-bold uppercase tracking-widest mt-1">
+              Remote Security Lockdown Active
+            </p>
+            <div className="my-5 p-4 rounded-xl bg-slate-950 border border-slate-800 text-xs text-slate-300">
+              <span className="text-slate-500 block text-[10px] uppercase font-bold mb-1">Reason provided:</span>
+              "{remoteLockReason || 'This terminal has been temporarily locked by store management.'}"
+            </div>
+            <p className="text-xs text-slate-400">
+              Please contact your store manager or administrator to unlock this counter terminal.
+            </p>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -157,8 +157,8 @@ export function verifyPin(enteredPin: string, storedValue: string): boolean {
   return timingSafeEqual(cleanEntered, cleanStored);
 }
 
-const SECRET_APP_KEY = (typeof process !== 'undefined' && process.env && process.env.SESSION_SECRET) 
-  ? process.env.SESSION_SECRET 
+const SECRET_APP_KEY = (typeof process !== 'undefined' && process.env && (process.env.JWT_SECRET || process.env.SESSION_SECRET)) 
+  ? (process.env.JWT_SECRET || process.env.SESSION_SECRET) 
   : 'KIID_FROM_DREAM_COLD_ROOM_2026_SECRET';
 
 /**

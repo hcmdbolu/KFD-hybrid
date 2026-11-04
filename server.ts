@@ -1,5 +1,6 @@
 import express from 'express';
 import type { Request, Response } from 'express';
+import cors from 'cors';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
@@ -159,6 +160,27 @@ function saveDatabase(dataToSave: CentralDatabase = db): boolean {
 db = loadDatabase();
 
 const app = express();
+
+// Multi-tenant CORS configuration for Vercel and remote POS terminals
+const allowedCorsOrigins = process.env.CORS_ORIGIN
+  ? process.env.CORS_ORIGIN.split(',').map(o => o.trim())
+  : '*';
+
+app.use(cors({
+  origin: (origin, callback) => {
+    if (!origin) return callback(null, true);
+    if (allowedCorsOrigins === '*' || (Array.isArray(allowedCorsOrigins) && (allowedCorsOrigins.includes('*') || allowedCorsOrigins.includes(origin)))) {
+      return callback(null, true);
+    }
+    if (origin.endsWith('.vercel.app')) {
+      return callback(null, true);
+    }
+    return callback(null, true);
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'x-store-id', 'x-session-token', 'x-terminal-id'],
+}));
 app.use(express.json({ limit: '15mb' }));
 
 // Tenant Context Extraction Middleware
@@ -193,10 +215,13 @@ if (fs.existsSync(PUBLIC_DIR)) {
 
 // Health check endpoint for Electron and local connectivity
 app.get('/api/health', (_req: Request, res: Response) => {
+  const timestamp = new Date().toISOString();
   res.json({
     status: 'ok',
+    timestamp,
     version: db ? db.version : 1,
-    time: new Date().toISOString(),
+    database: pgDb ? 'postgresql' : 'sqlite',
+    time: timestamp,
   });
 });
 
@@ -495,7 +520,7 @@ app.get('/api/health', (req: Request, res: Response) => {
   res.json({ status: 'ok', version: meta.version });
 });
 
-app.get('/api/status', (req: Request, res: Response) => {
+app.get('/api/status', async (req: Request, res: Response) => {
   const storeId = (req as any).storeId || 'store_default';
   const meta = sqliteDb.getMetadata();
   const snapshot = await (pgDb ? pgDb.getSnapshot(storeId) : sqliteDb.getSnapshot(storeId));
@@ -558,7 +583,7 @@ app.get('/api/events', (req: Request, res: Response) => {
 });
 
 // 3. Incremental polling fallback (for terminals with SSE reconnection delays)
-app.get('/api/poll', (req: Request, res: Response) => {
+app.get('/api/poll', async (req: Request, res: Response) => {
   const storeId = (req as any).storeId || 'store_default';
   const clientVersion = Number(req.query.version) || 0;
   const meta = sqliteDb.getMetadata();
@@ -2836,7 +2861,7 @@ async function startServer() {
     });
   }
 
-  const HOST = process.env.HOST || '127.0.0.1';
+  const HOST = process.env.HOST || (isProduction || process.env.PORT ? '0.0.0.0' : '127.0.0.1');
   app.listen(PORT, HOST, () => {
     console.log(`[POS SERVER] Centralized DB server running on http://${HOST}:${PORT} (${isProduction ? 'Production' : 'Development'})`);
   });

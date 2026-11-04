@@ -325,6 +325,7 @@ export const PosTerminal: React.FC<PosTerminalProps> = ({
       let paymentMeta: {
         pos_terminal_id?: string;
         pos_terminal_name?: string;
+        bank_account_id?: string;
         bank_account_number?: string;
         bank_name?: string;
         payment_reference?: string;
@@ -333,7 +334,13 @@ export const PosTerminal: React.FC<PosTerminalProps> = ({
         balance_due?: number;
         payment_due_date?: string;
         deposit_payment_method?: 'Cash' | 'POS' | 'Bank Transfer' | 'Transfer' | string;
-      } | undefined = undefined;
+        deposit_pos_terminal_id?: string;
+        deposit_pos_terminal_name?: string;
+        deposit_bank_account_id?: string;
+        deposit_bank_account_number?: string;
+        deposit_bank_name?: string;
+        deposit_reference?: string;
+      } | any = undefined;
 
       if (selectedPaymentMethod === 'POS') {
         const term = posTerminals.find(t => t.id === selectedPosTerminalId) || activePosDevices[0];
@@ -427,20 +434,7 @@ export const PosTerminal: React.FC<PosTerminalProps> = ({
           deposit_reference: depositMeta.payment_reference,
         };
       }
-      if (false) {
-        };
-
-
-        const creditAmt = Math.max(0, cartFinalTotal - depNum);
-        paymentMeta = {
-          credit_amount: creditAmt,
-          deposit_amount: depNum,
-          balance_due: creditAmt,
-          payment_due_date: creditDueDate,
-          deposit_payment_method: depNum > 0 ? creditDepositMethod : undefined,
-          payment_reference: 'LEGACY_UNUSED',
-        };
-      }
+      
 
       const res = processCheckout(
         selectedPaymentMethod,
@@ -1736,21 +1730,6 @@ export const PosTerminal: React.FC<PosTerminalProps> = ({
                                     <span>Cash deposit will be credited to active cashier drawer float.</span>
                                   </div>
                                 )}
-                                  {(['Cash', 'POS', 'Bank Transfer'] as const).map(m => (
-                                    <button
-                                      key={m}
-                                      type="button"
-                                      onClick={() => setCreditDepositMethod(m)}
-                                      className={`py-1 rounded font-semibold border ${
-                                        creditDepositMethod === m
-                                          ? 'bg-indigo-600 text-white border-indigo-600'
-                                          : 'bg-white text-slate-700 border-slate-200'
-                                      }`}
-                                    >
-                                      {m}
-                                    </button>
-                                  ))}
-                                </div>
                               </div>
                             )}
 

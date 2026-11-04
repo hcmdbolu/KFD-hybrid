@@ -61,3 +61,14 @@ export function getEventsSourceUrl(storeId: string = 'store_default'): string {
   return getApiUrl(`/api/events?store_id=${encodeURIComponent(storeId)}`);
 }
 
+
+// Global interceptor: automatically redirects relative /api calls to API_BASE_URL (for Vercel deployment)
+if (typeof window !== 'undefined' && API_BASE_URL) {
+  const nativeFetch = window.fetch.bind(window);
+  window.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
+    if (typeof input === 'string' && input.startsWith('/api')) {
+      input = `${API_BASE_URL}${input}`;
+    }
+    return nativeFetch(input, init);
+  };
+}

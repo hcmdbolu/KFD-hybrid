@@ -22,7 +22,7 @@ export class PosPostgresDatabase implements IPosDatabase {
 
     this.pool = new Pool({
       connectionString: connStr,
-      ssl: process.env.PGSSLMODE === 'disable' || !process.env.PGSSLMODE && (!connStr || connStr.includes('localhost') || connStr.includes('127.0.0.1'))
+      ssl: (process.env.PGSSLMODE === 'disable' || process.env.DATABASE_SSL === 'false' || (!process.env.DATABASE_URL && (!connStr || connStr.includes('localhost') || connStr.includes('127.0.0.1'))))
         ? false
         : { rejectUnauthorized: false },
       max: Number(process.env.PG_POOL_MAX || 20),
@@ -30,7 +30,7 @@ export class PosPostgresDatabase implements IPosDatabase {
       connectionTimeoutMillis: 5000,
     });
 
-    this.pool.on('error', (err) => {
+    this.pool.on('error', (err: any) => {
       console.error('[POSTGRES POOL ERROR] Unexpected client error:', err);
     });
   }
@@ -135,7 +135,7 @@ export class PosPostgresDatabase implements IPosDatabase {
     return this.withTenant(storeId, async (client) => {
       const safeTable = table.replace(/[^a-z0-9_]/gi, '');
       const res = await client.query(`SELECT data FROM ${safeTable} WHERE store_id = $1 ORDER BY created_at DESC`, [storeId]);
-      return res.rows.map(r => (typeof r.data === 'string' ? JSON.parse(r.data) : r.data));
+      return res.rows.map((r: any) => (typeof r.data === 'string' ? JSON.parse(r.data) : r.data));
     });
   }
 
@@ -921,7 +921,7 @@ export class PosPostgresDatabase implements IPosDatabase {
 
   public async listTenants(): Promise<any[]> {
     const res = await this.pool.query('SELECT store_id, business_name, vertical, currency, phone, address, status, settings, created_at FROM tenants ORDER BY created_at ASC');
-    return res.rows.map(r => ({
+    return res.rows.map((r: any) => ({
       ...r,
       settings: typeof r.settings === 'string' ? JSON.parse(r.settings) : r.settings,
     }));
@@ -1185,7 +1185,7 @@ export class PosPostgresDatabase implements IPosDatabase {
         : await client.query('SELECT id, name, store_id, ip_address, app_version, last_heartbeat, pending_outbox_count, is_locked, lock_reason, data FROM pos_terminals WHERE store_id = $1', [effectiveStoreId]);
 
       const now = Date.now();
-      return res.rows.map(r => {
+      return res.rows.map((r: any) => {
         const parsed = typeof r.data === 'string' ? JSON.parse(r.data) : r.data;
         const heartbeatMs = r.last_heartbeat ? new Date(r.last_heartbeat).getTime() : 0;
         const isOnline = (now - heartbeatMs) < 45000;

@@ -517,8 +517,6 @@ export const ReportingDashboard: React.FC<ReportingDashboardProps> = ({ onQuickR
       totalCreditDeposits: creditDepositCash + creditDepositTransfer + creditDepositPos,
       totalDebtRecoveries,
       debtRepaymentCount,
-
-      },
       totalReconciled,
       totalGross,
       totalRefunds,

@@ -4,9 +4,9 @@ import { verifySessionToken } from '../../src/utils/security.ts';
 export interface TenantRequest extends Request {
   user?: {
     valid: boolean;
-    staffId: string;
-    role: string;
-    storeId: string;
+    staffId?: string;
+    role?: string;
+    storeId?: string;
     permissions?: string[];
   };
   storeId: string;
@@ -70,7 +70,7 @@ export function requireTenantRole(...allowedRoles: string[]) {
       return next();
     }
 
-    if (tReq.user && allowedRoles.includes(tReq.user.role)) {
+    if (tReq.user?.role && allowedRoles.includes(tReq.user.role)) {
       return next();
     }
 

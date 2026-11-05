@@ -295,6 +295,8 @@ CREATE TABLE IF NOT EXISTS voided_orders (
     void_id TEXT NOT NULL,
     store_id TEXT NOT NULL DEFAULT 'store_default' REFERENCES tenants(store_id) ON DELETE CASCADE,
     voided_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     cashier_id TEXT,
     data JSONB NOT NULL DEFAULT '{}'::jsonb,
     PRIMARY KEY (store_id, void_id)
@@ -379,6 +381,7 @@ CREATE TABLE IF NOT EXISTS receipt_settings (
     id TEXT NOT NULL,
     store_id TEXT NOT NULL DEFAULT 'store_default' REFERENCES tenants(store_id) ON DELETE CASCADE,
     data JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY (store_id, id)
 );
@@ -390,6 +393,7 @@ CREATE TABLE IF NOT EXISTS discount_settings (
     id TEXT NOT NULL,
     store_id TEXT NOT NULL DEFAULT 'store_default' REFERENCES tenants(store_id) ON DELETE CASCADE,
     data JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY (store_id, id)
 );
@@ -404,6 +408,7 @@ CREATE TABLE IF NOT EXISTS categories (
     description TEXT,
     data JSONB NOT NULL DEFAULT '{}'::jsonb,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY (store_id, id)
 );
 
@@ -426,6 +431,7 @@ CREATE TABLE IF NOT EXISTS discount_rules (
     max_discount_cap NUMERIC(14, 2),
     is_active SMALLINT NOT NULL DEFAULT 1,
     data JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY (store_id, rule_id)
 );
@@ -508,6 +514,21 @@ BEGIN
         ', tbl);
     END LOOP;
 END $$;
+
+
+-- ----------------------------------------------------------------------------
+-- Backward-Compatible Column Migrations (Idempotent for live existing databases)
+-- ----------------------------------------------------------------------------
+ALTER TABLE discount_rules ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW();
+ALTER TABLE discount_rules ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
+ALTER TABLE categories ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW();
+ALTER TABLE categories ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
+ALTER TABLE discount_settings ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW();
+ALTER TABLE discount_settings ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
+ALTER TABLE receipt_settings ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW();
+ALTER TABLE receipt_settings ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
+ALTER TABLE voided_orders ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW();
+ALTER TABLE voided_orders ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
 
 -- ----------------------------------------------------------------------------
 -- Ensure Default Tenant & Platform Metadata

@@ -48,6 +48,23 @@ export class PosPostgresDatabase implements IPosDatabase {
         await this.pool.query(sql);
         console.log('[POSTGRES] Schema, GIN indexes, and RLS policies initialized successfully.');
       }
+
+      // Idempotent column migrations for live databases (discount_rules, categories, settings, etc.)
+      console.log('[POSTGRES] Verifying syncable table column migrations...');
+      await this.pool.query(`
+        ALTER TABLE discount_rules ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW();
+        ALTER TABLE discount_rules ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
+        ALTER TABLE categories ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW();
+        ALTER TABLE categories ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
+        ALTER TABLE discount_settings ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW();
+        ALTER TABLE discount_settings ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
+        ALTER TABLE receipt_settings ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW();
+        ALTER TABLE receipt_settings ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
+        ALTER TABLE voided_orders ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW();
+        ALTER TABLE voided_orders ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
+      `);
+      console.log('[POSTGRES] Startup migrations verified.');
+
       this.isInitialized = true;
     } catch (err: any) {
       console.error('[POSTGRES] Schema initialization error:', err.message);
@@ -134,8 +151,38 @@ export class PosPostgresDatabase implements IPosDatabase {
   public async getTable(table: string, storeId: string = 'store_default'): Promise<any[]> {
     return this.withTenant(storeId, async (client) => {
       const safeTable = table.replace(/[^a-z0-9_]/gi, '');
-      const res = await client.query(`SELECT data FROM ${safeTable} WHERE store_id = $1 ORDER BY created_at DESC`, [storeId]);
-      return res.rows.map((r: any) => (typeof r.data === 'string' ? JSON.parse(r.data) : r.data));
+      try {
+        const res = await client.query(
+          `SELECT data FROM ${safeTable} WHERE store_id = $1 ORDER BY COALESCE(updated_at, created_at) DESC`,
+          [storeId]
+        );
+        return res.rows.map((r: any) => (typeof r.data === 'string' ? JSON.parse(r.data) : r.data));
+      } catch (err: any) {
+        if (err.code === '42703') { // 42703: undefined_column error fallback
+          try {
+            const fallbackRes = await client.query(
+              `SELECT data FROM ${safeTable} WHERE store_id = $1 ORDER BY updated_at DESC`,
+              [storeId]
+            );
+            return fallbackRes.rows.map((r: any) => (typeof r.data === 'string' ? JSON.parse(r.data) : r.data));
+          } catch {
+            try {
+              const createdRes = await client.query(
+                `SELECT data FROM ${safeTable} WHERE store_id = $1 ORDER BY created_at DESC`,
+                [storeId]
+              );
+              return createdRes.rows.map((r: any) => (typeof r.data === 'string' ? JSON.parse(r.data) : r.data));
+            } catch {
+              const rawRes = await client.query(
+                `SELECT data FROM ${safeTable} WHERE store_id = $1`,
+                [storeId]
+              );
+              return rawRes.rows.map((r: any) => (typeof r.data === 'string' ? JSON.parse(r.data) : r.data));
+            }
+          }
+        }
+        throw err;
+      }
     });
   }
 
@@ -670,9 +717,9 @@ export class PosPostgresDatabase implements IPosDatabase {
       const id = category.id || `CAT-${Date.now()}`;
       const payload = { ...category, id, store_id: storeId };
       await client.query(`
-        INSERT INTO categories (id, store_id, name, description, data)
-        VALUES ($1, $2, $3, $4, $5)
-        ON CONFLICT (store_id, id) DO UPDATE SET name = excluded.name, description = excluded.description, data = excluded.data
+        INSERT INTO categories (id, store_id, name, description, data, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5, NOW(), NOW())
+        ON CONFLICT (store_id, id) DO UPDATE SET name = excluded.name, description = excluded.description, data = excluded.data, updated_at = NOW()
       `, [id, storeId, category.name, category.description || null, JSON.stringify(payload)]);
     });
     await this.touchVersion();
@@ -697,8 +744,8 @@ export class PosPostgresDatabase implements IPosDatabase {
         INSERT INTO discount_rules (
           rule_id, store_id, name, description, condition_type, threshold_value,
           discount_type, discount_value, scope, requires_manager_approval,
-          max_discount_cap, is_active, data, updated_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW())
+          max_discount_cap, is_active, data, created_at, updated_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW(), NOW())
         ON CONFLICT (store_id, rule_id) DO UPDATE SET
           name = excluded.name,
           description = excluded.description,

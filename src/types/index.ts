@@ -39,6 +39,9 @@ export type ProductStatus = 'Active' | 'Inactive';
 
 export interface Product {
   item_sn: string; // e.g. ITEM-00045
+  store_id?: string;
+  branch_id?: string;
+  branch_quantities?: Record<string, number>; // Branch-scoped inventory map (branch_id -> quantity)
   item_name: string; // e.g. Product Name
   item_picture: string;
   quantity: number; // Current stock in BASE UNITS (e.g. 400 sachets)
@@ -77,11 +80,13 @@ export type PosProvider = 'Moniepoint' | 'OPay' | 'GTBank' | 'Zenith Bank' | 'Ac
 
 export interface PosTerminalConfig {
   id: string; // e.g. "POS-001", "BANK-001"
+  store_id?: string;
+  branch_id?: string;
   name: string; // e.g. "Moniepoint POS - Counter 1", "GTBank Commercial Account"
   type: PosAccountType;
   provider: PosProvider;
   terminal_id?: string; // Terminal Serial or Merchant ID (e.g. "MP-882019", "OPAY-7721")
-  account_name: string; // e.g. "Kiid From Dream Enterprises"
+  account_name: string; // e.g. "SmartSales Enterprises"
   account_number: string; // e.g. "0123456789"
   bank_name: string; // e.g. "Moniepoint Microfinance Bank", "Guaranty Trust Bank"
   assigned_location?: string; // e.g. "Counter 1 - Retail Counter", "Main Checkout"
@@ -214,6 +219,7 @@ export interface SaleItem {
 
 export interface SaleTransaction {
   store_id?: string;
+  branch_id?: string;
   transaction_id: string; // TXN-20260922-001
   date_time: string; // 2026-09-22 10:30 AM
   items: SaleItem[];
@@ -351,6 +357,8 @@ export type UserRole = 'Cashier' | 'Supervisor' | 'Manager' | 'Admin' | 'Super A
 
 export interface Employee {
   staff_id: string; // STAFF-001
+  store_id?: string;
+  branch_id?: string;
   staff_name: string;
   username?: string; // e.g. kola, ibrahim, chidinma, alex, admin
   password?: string; // e.g. admin123
@@ -424,6 +432,8 @@ export interface StockTransferRecord {
   unit: string;
   from_location: string;
   to_location: string;
+  from_branch_id?: string;
+  to_branch_id?: string;
   authorized_by_id: string;
   authorized_by_name: string;
   notes?: string;
@@ -697,6 +707,19 @@ export type TenantVertical =
   | 'BOUTIQUE' 
   | 'GENERAL_RETAIL';
 
+export interface BranchConfig {
+  branch_id: string;
+  store_id: string;
+  name: string;
+  address?: string;
+  phone?: string;
+  manager_name?: string;
+  is_main_branch?: boolean;
+  status: 'ACTIVE' | 'DEACTIVATED';
+  created_at: string;
+  updated_at?: string;
+}
+
 export interface TenantConfig {
   store_id: string;
   business_name: string;
@@ -705,7 +728,9 @@ export interface TenantConfig {
   phone?: string;
   email?: string;
   address?: string;
-  status: 'ACTIVE' | 'SUSPENDED';
+  status: 'ACTIVE' | 'DEACTIVATED' | 'SUSPENDED';
+  can_create_branches?: boolean;
+  branches?: BranchConfig[];
   created_at: string;
   updated_at: string;
   settings?: Record<string, any>;

@@ -137,9 +137,9 @@ Supabase provides PgBouncer in Session Mode (port 6543) with a connection limit 
 On local desktop cashiers:
 1. **Node SQLite (`node:sqlite`)**:
    - Packaged inside the Electron embedded backend.
-   - Stored in `%APPDATA%/kiidfromdream-pos/data/pos_database.db`.
+   - Stored in `%APPDATA%/smartsales-pos/data/pos_database.db`.
    - Uses write-ahead logging (WAL mode) and passive checkpointing for instant write speeds.
-2. **Client IndexedDB (`kiidfromdream_pos_idb`)**:
+2. **Client IndexedDB (`smartsales_pos_idb`)**:
    - Runs directly in the browser/Chromium renderer.
    - Contains two object stores:
      - `outbox_events`: Stores queued offline mutations waiting for cloud push.
@@ -254,7 +254,7 @@ Cashiers and managers unlock terminals using numeric PINs. Plaintext PINs are ne
 ```typescript
 export function hashPin(pin: string, existingSalt?: string): string {
   const salt = existingSalt || generateSalt(); // 16 random hex characters
-  const hash = sha256(`${salt}_KIID_POS_${cleanPin}`);
+  const hash = sha256(`${salt}_SMARTSALES_POS_${cleanPin}`);
   return `${salt}:${hash}`;
 }
 ```

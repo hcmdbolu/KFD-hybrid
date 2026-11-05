@@ -1,5 +1,5 @@
 /**
- * KIID FROM DREAM POS - Centralized Cloud & Local API Client
+ * SMARTSALES POS - Centralized Cloud & Local API Client
  * Provides base URL abstraction, bearer JWT injection, tenant-scoping, and resilient error handling.
  */
 
@@ -17,7 +17,7 @@ export function getApiUrl(endpoint: string): string {
 
 export function getAuthToken(): string | null {
   try {
-    return localStorage.getItem('kiid_pos_auth_token');
+    return localStorage.getItem('smartsales_pos_auth_token');
   } catch {
     return null;
   }

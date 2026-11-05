@@ -1,7 +1,7 @@
-// KIID FROM DREAM POS - Offline Service Worker
+// SMARTSALES POS - Offline Service Worker
 // Enables cashier terminals to cold-boot, refresh, and operate completely offline
 
-const CACHE_NAME = 'kfd-pos-v2.4.0';
+const CACHE_NAME = 'smartsales-pos-v2.4.0';
 
 const PRECACHE_ASSETS = [
   '/',

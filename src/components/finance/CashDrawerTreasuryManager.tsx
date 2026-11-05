@@ -127,7 +127,7 @@ export const CashDrawerTreasuryManager: React.FC<CashDrawerTreasuryManagerProps>
   const [formType, setFormType] = useState<PosAccountType>('POS_TERMINAL');
   const [formProvider, setFormProvider] = useState<PosProvider>('Moniepoint');
   const [formTerminalId, setFormTerminalId] = useState('');
-  const [formAccountName, setFormAccountName] = useState('Kiid From Dream Frozen Foods Ltd');
+  const [formAccountName, setFormAccountName] = useState('SmartSales Frozen Foods Ltd');
   const [formAccountNumber, setFormAccountNumber] = useState('');
   const [formBankName, setFormBankName] = useState('Moniepoint Microfinance Bank');
   const [formLocation, setFormLocation] = useState('Main Retail Counter 1');
@@ -346,7 +346,7 @@ export const CashDrawerTreasuryManager: React.FC<CashDrawerTreasuryManagerProps>
     setFormType(type);
     setFormProvider(type === 'BANK_TRANSFER_ACCOUNT' ? 'GTBank' : 'Moniepoint');
     setFormTerminalId(type === 'POS_TERMINAL' ? `MP-${Math.floor(100000 + Math.random() * 900000)}` : '');
-    setFormAccountName('Kiid From Dream Frozen Foods Ltd');
+    setFormAccountName('SmartSales Frozen Foods Ltd');
     setFormAccountNumber('');
     setFormBankName(type === 'BANK_TRANSFER_ACCOUNT' ? 'Guaranty Trust Bank' : 'Moniepoint Microfinance Bank');
     setFormLocation('Main Retail Counter 1');
@@ -1875,7 +1875,7 @@ export const CashDrawerTreasuryManager: React.FC<CashDrawerTreasuryManagerProps>
             {/* Printable Voucher Paper */}
             <div id="printable-voucher" className="p-6 bg-slate-50 font-mono text-xs text-slate-900 space-y-4">
               <div className="text-center border-b border-dashed border-slate-300 pb-3">
-                <div className="font-black text-sm uppercase tracking-wide">KIID FROM DREAM FROZEN FOODS</div>
+                <div className="font-black text-sm uppercase tracking-wide">SMARTSALES FROZEN FOODS</div>
                 <div className="text-[10px] text-slate-500 mt-0.5">TREASURY HANDOVER & CLEARANCE VOUCHER</div>
                 <div className="text-[10px] text-slate-400 mt-1">Ref: {selectedVoucher.transfer_id}</div>
               </div>

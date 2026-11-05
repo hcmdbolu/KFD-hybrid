@@ -1,17 +1,20 @@
 {
-  "appId": "com.kiidfromdream.pos",
-  "productName": "KIID FROM DREAM POS",
+  "appId": "com.smartsales.pos",
+  "productName": "SmartSales POS",
   "directories": {
     "output": "release"
   },
-  "files": [
-    "dist/**/*",
-    "electron/**/*",
-    "data/pos_database.json",
-    "!data/*.db*",
-    "!data/*.sqlite*",
-    "package.json"
-  ],
+  "files": {
+    "from": ".",
+    "filter": [
+      "dist/**/*",
+      "electron/**/*",
+      "data/pos_database.json",
+      "!data/*.db*",
+      "!data/*.sqlite*",
+      "package.json"
+    ]
+  },
   "extraResources": [
     {
       "from": "data",
@@ -38,6 +41,6 @@
     "createDesktopShortcut": true,
     "createStartMenuShortcut": true,
     "deleteAppDataOnUninstall": false,
-    "shortcutName": "KIID FROM DREAM POS"
+    "shortcutName": "SmartSales POS"
   }
 }

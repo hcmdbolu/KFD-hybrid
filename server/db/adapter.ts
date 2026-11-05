@@ -44,13 +44,27 @@ export interface IPosDatabase {
     vertical?: string;
     currency?: string;
     phone?: string;
+    email?: string;
     address?: string;
     admin_name?: string;
     admin_username?: string;
     admin_pin?: string;
+    can_create_branches?: boolean;
   }): any | Promise<any>;
   listTenants(): any[] | Promise<any[]>;
   getTenant(storeId: string): any | null | Promise<any | null>;
+  updateTenantStatus(storeId: string, status: 'ACTIVE' | 'DEACTIVATED'): any | Promise<any>;
+  updateTenantPermissions(storeId: string, canCreateBranches: boolean): any | Promise<any>;
+  listBranches(storeId?: string): any[] | Promise<any[]>;
+  createBranch(params: {
+    store_id: string;
+    name: string;
+    address?: string;
+    phone?: string;
+    manager_name?: string;
+    is_main_branch?: boolean;
+  }): any | Promise<any>;
+  updateBranchStatus(storeId: string, branchId: string, status: 'ACTIVE' | 'DEACTIVATED'): any | Promise<any>;
   processSyncPush(params: {
     store_id: string;
     terminal_id: string;
@@ -96,4 +110,3 @@ export interface IPosDatabase {
   getFleetTerminals(storeId?: string): any[] | Promise<any[]>;
   getSnapshot(storeId?: string): any | Promise<any>;
 }
-

@@ -1786,7 +1786,7 @@ export const CustomerManager: React.FC<CustomerManagerProps> = ({ onSelectCustom
             }
           `}</style>
           <div className="max-w-[320px] mx-auto text-center space-y-2 pb-4 border-b border-black">
-            <h1 className="font-bold text-base uppercase">{receiptSettings.business_name || 'KIID FROM DREAM'}</h1>
+            <h1 className="font-bold text-base uppercase">{receiptSettings.business_name || 'SMARTSALES'}</h1>
             <p className="text-[10px]">{receiptSettings.address_line1}</p>
             <p className="text-[10px]">Tel: {receiptSettings.phone_numbers}</p>
             <div className="border-t border-b border-dashed border-black py-1 my-2 font-bold text-xs uppercase">

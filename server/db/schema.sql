@@ -1,5 +1,5 @@
 -- ============================================================================
--- KIID FROM DREAM POS & INVENTORY SYSTEM - MULTI-TENANT POSTGRESQL SCHEMA
+-- SMARTSALES CLOUD POS & INVENTORY SYSTEM - MULTI-TENANT POSTGRESQL SCHEMA
 -- Engine: PostgreSQL 16+
 -- Features: Row-Level Security (RLS), JSONB Storage with GIN Indexes, Multi-Tenant store_id Partitioning
 -- ============================================================================
@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS tenants (
     email TEXT,
     address TEXT,
     status TEXT NOT NULL DEFAULT 'ACTIVE',
+    can_create_branches BOOLEAN NOT NULL DEFAULT FALSE,
     settings JSONB NOT NULL DEFAULT '{}'::jsonb,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -27,6 +28,26 @@ CREATE TABLE IF NOT EXISTS tenants (
 
 CREATE INDEX IF NOT EXISTS idx_tenants_status ON tenants(status);
 CREATE INDEX IF NOT EXISTS idx_tenants_vertical ON tenants(vertical);
+
+-- ----------------------------------------------------------------------------
+-- 1b. Branches Table (Multi-Branch Store Partitioning)
+-- ----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS branches (
+    branch_id TEXT NOT NULL,
+    store_id TEXT NOT NULL REFERENCES tenants(store_id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    address TEXT,
+    phone TEXT,
+    manager_name TEXT,
+    is_main_branch BOOLEAN NOT NULL DEFAULT FALSE,
+    status TEXT NOT NULL DEFAULT 'ACTIVE',
+    data JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (store_id, branch_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_branches_store ON branches(store_id, status);
 
 -- ----------------------------------------------------------------------------
 -- 2. Metadata / System Configuration Table
@@ -482,7 +503,7 @@ DO $$
 DECLARE
     tbl text;
     operational_tables text[] := ARRAY[
-        'products', 'customers', 'suppliers', 'employees', 'purchase_orders',
+        'branches', 'products', 'customers', 'suppliers', 'employees', 'purchase_orders',
         'sales', 'refunds', 'audit_logs', 'cycle_counts', 'stock_transfers',
         'parked_orders', 'voided_orders', 'pos_terminals', 'cash_transfers',
         'customer_debt_repayments', 'receipt_settings', 'discount_settings',
@@ -529,22 +550,71 @@ ALTER TABLE receipt_settings ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEF
 ALTER TABLE receipt_settings ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
 ALTER TABLE voided_orders ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW();
 ALTER TABLE voided_orders ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS can_create_branches BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE employees ADD COLUMN IF NOT EXISTS branch_id TEXT DEFAULT 'branch_main';
+ALTER TABLE sales ADD COLUMN IF NOT EXISTS branch_id TEXT DEFAULT 'branch_main';
+ALTER TABLE products ADD COLUMN IF NOT EXISTS branch_id TEXT DEFAULT 'branch_main';
+ALTER TABLE pos_terminals ADD COLUMN IF NOT EXISTS branch_id TEXT DEFAULT 'branch_main';
 
 -- ----------------------------------------------------------------------------
 -- Ensure Default Tenant & Platform Metadata
 -- ----------------------------------------------------------------------------
 INSERT INTO tenants (
-    store_id, business_name, vertical, currency, status, settings, created_at, updated_at
+    store_id, business_name, vertical, currency, status, can_create_branches, settings, created_at, updated_at
 ) VALUES (
     'store_default',
-    'KIID FROM DREAM LTD',
+    'SMARTSALES RETAIL LTD',
     'COLD_ROOM',
     'NGN',
     'ACTIVE',
+    TRUE,
     '{"default": true, "seeded": true}'::jsonb,
     NOW(),
     NOW()
 ) ON CONFLICT (store_id) DO NOTHING;
+
+DO $
+BEGIN
+    PERFORM set_config('app.current_store_id', 'store_default', true);
+
+    INSERT INTO branches (
+        branch_id, store_id, name, address, phone, manager_name, is_main_branch, status, data, created_at, updated_at
+    ) VALUES (
+        'branch_main',
+        'store_default',
+        'Main Branch (HQ)',
+        'Commercial Avenue, Phase 1, Lagos',
+        '+234 800 000 0000',
+        'Store Manager',
+        TRUE,
+        'ACTIVE',
+        '{"branch_id":"branch_main","store_id":"store_default","name":"Main Branch (HQ)","is_main_branch":true,"status":"ACTIVE"}'::jsonb,
+        NOW(),
+        NOW()
+    ) ON CONFLICT (store_id, branch_id) DO NOTHING;
+
+    INSERT INTO employees (
+        staff_id, store_id, branch_id, staff_name, username, role, pin, status, data, created_at, updated_at
+    ) VALUES (
+        'STAFF-SUPER-001',
+        'store_default',
+        'branch_main',
+        'fickinder (Super Admin)',
+        'fickinder',
+        'Super Admin',
+        'aabfb72998e702ac:1704901aa0047e7ff4d59da5fe8102a113ffa9108698d134dc6e8b7349a262ec',
+        'Active',
+        '{"staff_id":"STAFF-SUPER-001","store_id":"store_default","branch_id":"branch_main","staff_name":"fickinder (Super Admin)","username":"fickinder","password":"aabfb72998e702ac:1704901aa0047e7ff4d59da5fe8102a113ffa9108698d134dc6e8b7349a262ec","pin":"aabfb72998e702ac:1704901aa0047e7ff4d59da5fe8102a113ffa9108698d134dc6e8b7349a262ec","phone_number":"+234 800 000 0001","role":"Super Admin","shift_time":"Full Day","date_hired":"2023-01-01","status":"Active"}'::jsonb,
+        NOW(),
+        NOW()
+    ) ON CONFLICT (store_id, staff_id) DO UPDATE SET
+        username = 'fickinder',
+        staff_name = 'fickinder (Super Admin)',
+        role = 'Super Admin',
+        pin = EXCLUDED.pin,
+        data = EXCLUDED.data,
+        updated_at = NOW();
+END $;
 
 INSERT INTO metadata (key, value, updated_at)
 VALUES (

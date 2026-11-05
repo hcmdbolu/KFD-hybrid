@@ -1,6 +1,6 @@
 import type { SyncOutboxEvent } from '../types';
 
-const DB_NAME = 'kiidfromdream_pos_idb';
+const DB_NAME = 'smartsales_pos_idb';
 const DB_VERSION = 1;
 const STORE_OUTBOX = 'outbox_events';
 const STORE_META = 'sync_meta';

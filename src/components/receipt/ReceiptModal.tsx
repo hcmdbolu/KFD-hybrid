@@ -1,7 +1,8 @@
 import React from 'react';
 import { SaleTransaction } from '../../types';
 import { usePos } from '../../context/PosContext';
-import { Printer, X, Receipt } from 'lucide-react';
+import { Printer, X, Receipt, Usb, LockOpen } from 'lucide-react';
+import { printDirectEscPos, kickCashDrawerDirect } from '../../utils/escPosPrinter';
 
 interface ReceiptModalProps {
   transaction: SaleTransaction | null;
@@ -12,6 +13,7 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({ transaction, onClose
   const { customers, employees, receiptSettings } = usePos();
   const [detectedPrinter, setDetectedPrinter] = React.useState<string | null>(null);
   const [isPrinting, setIsPrinting] = React.useState(false);
+  const [escPosStatus, setEscPosStatus] = React.useState<string | null>(null);
 
   React.useEffect(() => {
     if (window.electronAPI?.getPrinters) {
@@ -109,7 +111,43 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({ transaction, onClose
               </span>
             )}
           </div>
-          <div className="flex items-center space-x-1.5">
+          <div className="flex items-center space-x-1">
+            <button
+              type="button"
+              onClick={async () => {
+                const res = await printDirectEscPos(
+                  transaction,
+                  receiptSettings,
+                  cashier ? cashier.staff_name : transaction.staff_id,
+                  customer ? customer.full_name : 'Walk-in Customer',
+                  true
+                );
+                if (res.success) {
+                  setEscPosStatus('Printed via ' + res.method);
+                } else {
+                  setEscPosStatus(res.error || 'Fallback to standard print');
+                  handlePrint();
+                }
+                setTimeout(() => setEscPosStatus(null), 3500);
+              }}
+              className="px-2 py-1 bg-cyan-600 hover:bg-cyan-500 text-white rounded-lg text-[10px] font-bold flex items-center space-x-1 transition-colors cursor-pointer"
+              title="Direct USB/Serial ESC/POS Thermal Print + Kick Cash Drawer"
+            >
+              <Usb className="w-3 h-3" />
+              <span>ESC/POS</span>
+            </button>
+            <button
+              type="button"
+              onClick={async () => {
+                const res = await kickCashDrawerDirect();
+                setEscPosStatus(res.success ? 'Cash drawer opened' : (res.error || 'Connect USB/Serial printer'));
+                setTimeout(() => setEscPosStatus(null), 3000);
+              }}
+              className="p-1.5 bg-slate-800 hover:bg-slate-700 text-amber-400 rounded-lg transition-colors cursor-pointer"
+              title="Kick Open RJ11 Cash Drawer"
+            >
+              <LockOpen className="w-3 h-3" />
+            </button>
             <button
               onClick={handlePrint}
               disabled={isPrinting}
@@ -126,6 +164,11 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({ transaction, onClose
             </button>
           </div>
         </div>
+        {escPosStatus && (
+          <div className="bg-slate-800 text-cyan-300 text-[10px] px-3 py-1 text-center font-mono border-b border-slate-700">
+            {escPosStatus}
+          </div>
+        )}
 
         {/* Printable Thermal Receipt Paper Container */}
         <div className="max-h-[82vh] overflow-y-auto p-2 bg-slate-100/60">
@@ -150,7 +193,7 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({ transaction, onClose
                 </div>
               )}
               <h2 className="text-[12.5px] font-black tracking-wide text-slate-950 uppercase leading-snug">
-                {receiptSettings.business_name || 'KIID FROM DREAM LTD'}
+                {receiptSettings.business_name || 'SMARTSALES RETAIL LTD'}
               </h2>
               {receiptSettings.tagline && (
                 <p className="text-[9px] text-slate-600 uppercase font-semibold leading-tight">

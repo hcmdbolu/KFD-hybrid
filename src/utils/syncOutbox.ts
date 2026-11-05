@@ -36,9 +36,9 @@ type SyncStateListener = (status: SyncEngineStatus) => void;
 type DeltasCallback = (deltas: NonNullable<SyncPullResult['deltas']>, serverVersion: number) => void;
 type RemoteLockListener = (notice: RemoteLockNotice) => void;
 
-const OUTBOX_KEY_PREFIX = 'kiid_pos_sync_outbox_';
-const SYNC_META_KEY_PREFIX = 'kiid_pos_sync_meta_';
-const TERMINAL_ID_KEY = 'kiid_pos_terminal_id';
+const OUTBOX_KEY_PREFIX = 'smartsales_pos_sync_outbox_';
+const SYNC_META_KEY_PREFIX = 'smartsales_pos_sync_meta_';
+const TERMINAL_ID_KEY = 'smartsales_pos_terminal_id';
 const APP_VERSION = '2.4.0';
 
 // In-Memory cache of outbox events per store for instant non-blocking UI access

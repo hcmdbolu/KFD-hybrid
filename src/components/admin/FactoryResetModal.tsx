@@ -119,7 +119,7 @@ export const FactoryResetModal: React.FC<FactoryResetModalProps> = ({
             <div>
               <h3 className="text-base font-bold text-white">Super Administrator Access Required</h3>
               <p className="text-xs text-slate-400 mt-2 max-w-md mx-auto">
-                Factory data resets are restricted strictly to the Super Administrator (Boluwatife). 
+                Factory data resets are restricted strictly to the Super Administrator (fickinder). 
                 Your current role is <strong>{activeStaff.role}</strong>.
               </p>
             </div>
@@ -204,7 +204,7 @@ export const FactoryResetModal: React.FC<FactoryResetModalProps> = ({
                     <span>Safely Preserved:</span>
                   </div>
                   <ul className="text-slate-300 space-y-1 pl-1 font-mono text-[10px]">
-                    <li>✅ Sole Super Admin (Boluwatife)</li>
+                    <li>✅ Sole Super Admin (fickinder)</li>
                     <li>✅ Configured POS Terminals</li>
                     <li>✅ Settlement Bank Accounts</li>
                     <li>✅ System Hardware Settings</li>
@@ -267,7 +267,7 @@ export const FactoryResetModal: React.FC<FactoryResetModalProps> = ({
                 </button>
               </div>
               <p className="text-[10px] text-slate-500">
-                Authorizes system wiping under Super Admin Boluwatife credentials.
+                Authorizes system wiping under Super Admin fickinder credentials.
               </p>
             </div>
 

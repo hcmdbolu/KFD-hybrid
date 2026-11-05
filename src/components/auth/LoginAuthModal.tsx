@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { usePos } from '../../context/PosContext';
+import { getApiUrl } from '../../utils/apiClient';
+import { TenantConfig } from '../../types';
 import { 
   X, 
   AlertCircle, 
@@ -21,12 +23,14 @@ interface LoginAuthModalProps {
   isOpen: boolean;
   onClose?: () => void;
   mode?: 'LOGIN' | 'SWITCH' | 'LOCK';
+  onOpenRegisterStore?: () => void;
 }
 
 export const LoginAuthModal: React.FC<LoginAuthModalProps> = ({
   isOpen,
   onClose,
   mode = 'LOGIN',
+  onOpenRegisterStore,
 }) => {
   const { 
     login, 
@@ -34,7 +38,28 @@ export const LoginAuthModal: React.FC<LoginAuthModalProps> = ({
     activeStaff,
     receiptSettings,
     syncStatus,
+    currentStoreId,
+    setCurrentStoreId,
+    currentBranchId,
+    setCurrentBranchId,
   } = usePos();
+
+  const [tenantsList, setTenantsList] = useState<TenantConfig[]>([]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    fetch(getApiUrl('/api/v1/tenants'))
+      .then(r => (r.ok ? r.json() : null))
+      .then(data => {
+        if (data && Array.isArray(data.tenants)) {
+          setTenantsList(data.tenants);
+        }
+      })
+      .catch(() => {});
+  }, [isOpen]);
+
+  const selectedTenant = tenantsList.find(t => t.store_id === currentStoreId);
+  const availableBranches = selectedTenant?.branches || [];
 
   // Mode selection: 'PIN' (Cashier Quick-PIN) or 'CREDENTIALS' (Manager/Admin Alphanumeric)
   const [activeTab, setActiveTab] = useState<'PIN' | 'CREDENTIALS'>('PIN');
@@ -70,7 +95,7 @@ export const LoginAuthModal: React.FC<LoginAuthModalProps> = ({
       setIsLoading(false);
       setOverrideLockScreen(false);
 
-      const savedUser = localStorage.getItem('kiidfromdream_saved_username');
+      const savedUser = localStorage.getItem('smartsales_saved_username');
       if (savedUser) {
         setUsername(savedUser);
         setRememberMe(true);
@@ -139,9 +164,9 @@ export const LoginAuthModal: React.FC<LoginAuthModalProps> = ({
     setIsLoading(true);
 
     if (rememberMe) {
-      localStorage.setItem('kiidfromdream_saved_username', cleanUser);
+      localStorage.setItem('smartsales_saved_username', cleanUser);
     } else {
-      localStorage.removeItem('kiidfromdream_saved_username');
+      localStorage.removeItem('smartsales_saved_username');
     }
 
     const res = await login(cleanUser, cleanPass);
@@ -256,7 +281,7 @@ export const LoginAuthModal: React.FC<LoginAuthModalProps> = ({
 
   const isStandalone = !isAuthenticated || mode === 'LOGIN';
   const isLockScreen = mode === 'LOCK' && !overrideLockScreen;
-  const storeName = receiptSettings?.business_name || 'KIID FROM DREAM LTD';
+  const storeName = receiptSettings?.business_name || 'SMARTSALES RETAIL LTD';
   const storeLogo = receiptSettings?.show_logo ? receiptSettings?.logo_base64 : null;
 
   return (
@@ -466,8 +491,62 @@ export const LoginAuthModal: React.FC<LoginAuthModalProps> = ({
               </div>
             </div>
 
+            {/* Store & Branch Target Selector (Multi-Tenant Store Login) */}
+            {tenantsList.length > 0 && (
+              <div className="mt-4 p-3 rounded-2xl bg-slate-800/50 border border-slate-700/60 text-left space-y-2.5">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                  <div>
+                    <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1">
+                      Select Store / Business
+                    </label>
+                    <select
+                      value={currentStoreId}
+                      onChange={e => {
+                        const nextStore = e.target.value;
+                        setCurrentStoreId(nextStore);
+                        const t = tenantsList.find(item => item.store_id === nextStore);
+                        if (t?.branches?.[0]?.branch_id) {
+                          setCurrentBranchId(t.branches[0].branch_id);
+                        } else {
+                          setCurrentBranchId('branch_main');
+                        }
+                      }}
+                      className="w-full px-2.5 py-2 bg-slate-900 border border-slate-700 rounded-xl text-xs text-white font-semibold focus:outline-none focus:border-emerald-500"
+                    >
+                      {tenantsList.map(t => (
+                        <option key={t.store_id} value={t.store_id}>
+                          {t.business_name} {t.status === 'DEACTIVATED' ? '(Deactivated)' : ''}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1">
+                      Select Store Branch
+                    </label>
+                    <select
+                      value={currentBranchId}
+                      onChange={e => setCurrentBranchId(e.target.value)}
+                      className="w-full px-2.5 py-2 bg-slate-900 border border-slate-700 rounded-xl text-xs text-white font-semibold focus:outline-none focus:border-emerald-500"
+                    >
+                      {availableBranches.length > 0 ? (
+                        availableBranches.map(b => (
+                          <option key={b.branch_id} value={b.branch_id}>
+                            {b.name} {b.status === 'DEACTIVATED' ? '(Deactivated)' : ''}
+                          </option>
+                        ))
+                      ) : (
+                        <option value="branch_main">Main Branch (HQ)</option>
+                      )}
+                    </select>
+                  </div>
+                </div>
+              </div>
+            )}
+
             {/* Mode Switcher Tabs */}
-            <div className="mt-5 p-1 bg-slate-800/80 border border-slate-700/60 rounded-2xl grid grid-cols-2 gap-1 text-xs font-bold text-slate-400">
+            <div className="mt-4 p-1 bg-slate-800/80 border border-slate-700/60 rounded-2xl grid grid-cols-2 gap-1 text-xs font-bold text-slate-400">
               <button
                 type="button"
                 onClick={() => {
@@ -741,8 +820,25 @@ export const LoginAuthModal: React.FC<LoginAuthModalProps> = ({
               </form>
             )}
 
+            {/* Separated Store Registration Entry Point */}
+            {onOpenRegisterStore && (
+              <div className="mt-5 pt-4 border-t border-slate-800/80">
+                <div className="text-[11px] text-slate-400 mb-2">
+                  Onboarding a new business to SmartSales Cloud?
+                </div>
+                <button
+                  type="button"
+                  onClick={onOpenRegisterStore}
+                  className="w-full py-2.5 px-4 rounded-xl bg-slate-800/90 hover:bg-slate-800 border border-cyan-500/30 hover:border-cyan-400/60 text-cyan-300 font-bold text-xs flex items-center justify-center gap-2 transition-all cursor-pointer"
+                >
+                  <Store className="w-4 h-4 text-cyan-400" />
+                  <span>Register New Store / Business Account</span>
+                </button>
+              </div>
+            )}
+
             {/* Footer Notice */}
-            <div className="mt-6 pt-4 border-t border-slate-800/80 text-[11px] text-slate-500 flex items-center justify-between">
+            <div className="mt-4 pt-3 border-t border-slate-800/80 text-[11px] text-slate-500 flex items-center justify-between">
               <span>{storeName} © 2026</span>
               <button
                 type="button"

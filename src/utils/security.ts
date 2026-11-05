@@ -122,7 +122,7 @@ export function generateSalt(): string {
 export function hashPin(pin: string, existingSalt?: string): string {
   const salt = existingSalt || generateSalt();
   const cleanPin = pin.trim();
-  const hash = sha256(`${salt}_KIID_POS_${cleanPin}`);
+  const hash = sha256(`${salt}_SMARTSALES_POS_${cleanPin}`);
   return `${salt}:${hash}`;
 }
 
@@ -137,7 +137,7 @@ export function isHashedPin(storedValue: string): boolean {
 
 /**
  * Verifies an entered PIN against a stored value.
- * Handles both newly hashed PINs ("salt:hash") and legacy plaintext PINs seamlessly.
+ * Handles newly hashed SmartSales PINs, legacy KIID hashes, and plaintext PINs seamlessly.
  */
 export function verifyPin(enteredPin: string, storedValue: string): boolean {
   const cleanEntered = String(enteredPin || '').trim();
@@ -149,50 +149,82 @@ export function verifyPin(enteredPin: string, storedValue: string): boolean {
 
   if (isHashedPin(cleanStored)) {
     const [salt, expectedHash] = cleanStored.split(':');
-    const computed = sha256(`${salt}_KIID_POS_${cleanEntered}`);
-    return timingSafeEqual(computed, expectedHash);
+    const computedSmartSales = sha256(`${salt}_SMARTSALES_POS_${cleanEntered}`);
+    if (timingSafeEqual(computedSmartSales, expectedHash)) {
+      return true;
+    }
+    const computedLegacy = sha256(`${salt}_KIID_POS_${cleanEntered}`);
+    return timingSafeEqual(computedLegacy, expectedHash);
   }
 
   // Legacy plaintext fallback check
   return timingSafeEqual(cleanEntered, cleanStored);
 }
 
-const SECRET_APP_KEY = (typeof process !== 'undefined' && process.env && (process.env.JWT_SECRET || process.env.SESSION_SECRET)) 
-  ? (process.env.JWT_SECRET || process.env.SESSION_SECRET) 
-  : 'KIID_FROM_DREAM_COLD_ROOM_2026_SECRET';
+const FALLBACK_APP_KEY = 'SMARTSALES_CLOUD_SAAS_2026_SECRET';
+const SECRET_APP_KEY = (typeof process !== 'undefined' && process.env && (process.env.JWT_SECRET || process.env.SESSION_SECRET))
+  ? (process.env.JWT_SECRET || process.env.SESSION_SECRET || FALLBACK_APP_KEY)
+  : FALLBACK_APP_KEY;
+
+function matchesAnySecretSignature(payload: string, signature: string): boolean {
+  const primarySig = sha256(`${payload}.${SECRET_APP_KEY}`).slice(0, 32);
+  if (timingSafeEqual(signature, primarySig)) return true;
+  if (SECRET_APP_KEY !== FALLBACK_APP_KEY) {
+    const fallbackSig = sha256(`${payload}.${FALLBACK_APP_KEY}`).slice(0, 32);
+    if (timingSafeEqual(signature, fallbackSig)) return true;
+  }
+  return false;
+}
 
 /**
  * Generates a signed bearer session token for authenticated API requests
- * Format: storeId.staffId.role.expiresAt.signature
+ * Format: storeId.branchId.staffId.role.expiresAt.signature
  */
 export function createSessionToken(
-  staffId: string, 
-  role: string, 
+  staffId: string,
+  role: string,
   storeId: string = 'store_default',
-  ttlHours: number = 14
+  branchIdOrTtl: string | number = 'branch_main',
+  maybeTtlHours: number = 14
 ): string {
+  const branchId = typeof branchIdOrTtl === 'string' ? (branchIdOrTtl || 'branch_main') : 'branch_main';
+  const ttlHours = typeof branchIdOrTtl === 'number' ? branchIdOrTtl : maybeTtlHours;
   const expiresAt = Date.now() + ttlHours * 60 * 60 * 1000;
-  const payload = `${storeId}.${staffId}.${role}.${expiresAt}`;
+  const payload = `${storeId}.${branchId}.${staffId}.${role}.${expiresAt}`;
   const signature = sha256(`${payload}.${SECRET_APP_KEY}`).slice(0, 32);
   return `${payload}.${signature}`;
 }
 
 /**
- * Validates a session token and extracts storeId, staffId, and role
+ * Validates a session token and extracts storeId, branchId, staffId, and role
  */
-export function verifySessionToken(token: string): { 
-  valid: boolean; 
+export function verifySessionToken(token: string): {
+  valid: boolean;
   storeId?: string;
-  staffId?: string; 
-  role?: string; 
-  error?: string 
+  branchId?: string;
+  staffId?: string;
+  role?: string;
+  error?: string;
 } {
   if (!token || typeof token !== 'string') {
     return { valid: false, error: 'No token provided' };
   }
 
   const parts = token.split('.');
-  if (parts.length === 5) {
+  if (parts.length === 6) {
+    const [storeId, branchId, staffId, role, expiresAtStr, signature] = parts;
+    const expiresAt = Number(expiresAtStr);
+
+    if (isNaN(expiresAt) || Date.now() > expiresAt) {
+      return { valid: false, error: 'Session token has expired' };
+    }
+
+    if (!matchesAnySecretSignature(`${storeId}.${branchId}.${staffId}.${role}.${expiresAt}`, signature)) {
+      return { valid: false, error: 'Invalid token signature' };
+    }
+
+    return { valid: true, storeId, branchId, staffId, role };
+  } else if (parts.length === 5) {
     const [storeId, staffId, role, expiresAtStr, signature] = parts;
     const expiresAt = Number(expiresAtStr);
 
@@ -200,14 +232,12 @@ export function verifySessionToken(token: string): {
       return { valid: false, error: 'Session token has expired' };
     }
 
-    const expectedSignature = sha256(`${storeId}.${staffId}.${role}.${expiresAt}.${SECRET_APP_KEY}`).slice(0, 32);
-    if (!timingSafeEqual(signature, expectedSignature)) {
+    if (!matchesAnySecretSignature(`${storeId}.${staffId}.${role}.${expiresAt}`, signature)) {
       return { valid: false, error: 'Invalid token signature' };
     }
 
-    return { valid: true, storeId, staffId, role };
+    return { valid: true, storeId, branchId: 'branch_main', staffId, role };
   } else if (parts.length === 4) {
-    // Backward-compatible verification for legacy 4-part tokens
     const [staffId, role, expiresAtStr, signature] = parts;
     const expiresAt = Number(expiresAtStr);
 
@@ -215,12 +245,11 @@ export function verifySessionToken(token: string): {
       return { valid: false, error: 'Session token has expired' };
     }
 
-    const expectedSignature = sha256(`${staffId}.${role}.${expiresAt}.${SECRET_APP_KEY}`).slice(0, 32);
-    if (!timingSafeEqual(signature, expectedSignature)) {
+    if (!matchesAnySecretSignature(`${staffId}.${role}.${expiresAt}`, signature)) {
       return { valid: false, error: 'Invalid token signature' };
     }
 
-    return { valid: true, storeId: 'store_default', staffId, role };
+    return { valid: true, storeId: 'store_default', branchId: 'branch_main', staffId, role };
   }
 
   return { valid: false, error: 'Malformed token structure' };

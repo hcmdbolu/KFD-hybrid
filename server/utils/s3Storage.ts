@@ -3,7 +3,7 @@ import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 const S3_ENDPOINT = process.env.S3_ENDPOINT || process.env.R2_ENDPOINT;
 const S3_ACCESS_KEY_ID = process.env.S3_ACCESS_KEY_ID || process.env.R2_ACCESS_KEY_ID;
 const S3_SECRET_ACCESS_KEY = process.env.S3_SECRET_ACCESS_KEY || process.env.R2_SECRET_ACCESS_KEY;
-const S3_BUCKET_NAME = process.env.S3_BUCKET_NAME || process.env.R2_BUCKET_NAME || 'kiid-pos-media';
+const S3_BUCKET_NAME = process.env.S3_BUCKET_NAME || process.env.R2_BUCKET_NAME || 'smartsales-pos-media';
 const S3_REGION = process.env.S3_REGION || process.env.AWS_REGION || 'auto';
 const S3_PUBLIC_DOMAIN = process.env.S3_PUBLIC_DOMAIN || process.env.R2_PUBLIC_DOMAIN;
 

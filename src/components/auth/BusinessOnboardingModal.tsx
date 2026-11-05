@@ -107,7 +107,7 @@ export const BusinessOnboardingModal: React.FC<BusinessOnboardingModalProps> = (
   onClose,
   onTenantCreated,
 }) => {
-  const { setCurrentStoreId, triggerOutboxFlush, forceSync } = usePos();
+  const { setCurrentStoreId, setCurrentBranchId, activeStaff, isAuthenticated, triggerOutboxFlush, forceSync } = usePos();
 
   const [step, setStep] = useState<1 | 2 | 3 | 4>(1);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -119,6 +119,7 @@ export const BusinessOnboardingModal: React.FC<BusinessOnboardingModalProps> = (
   const [currency, setCurrency] = useState('NGN');
   const [phone, setPhone] = useState('');
   const [address, setAddress] = useState('');
+  const [canCreateBranches, setCanCreateBranches] = useState(false);
 
   // Admin Account State
   const [adminName, setAdminName] = useState('Store Administrator');
@@ -178,6 +179,7 @@ export const BusinessOnboardingModal: React.FC<BusinessOnboardingModalProps> = (
           admin_name: adminName.trim(),
           admin_username: adminUsername.trim(),
           admin_pin: adminPin.trim(),
+          can_create_branches: canCreateBranches,
         }),
       });
 
@@ -190,8 +192,11 @@ export const BusinessOnboardingModal: React.FC<BusinessOnboardingModalProps> = (
       const createdTenant: TenantConfig = data.tenant;
       setRegisteredTenant(createdTenant);
 
-      // Instantly switch context to the new tenant store
+      // Instantly switch context to the new tenant store and its main branch
       setCurrentStoreId(createdTenant.store_id);
+      if (createdTenant.branches?.[0]?.branch_id) {
+        setCurrentBranchId(createdTenant.branches[0].branch_id);
+      }
       await triggerOutboxFlush();
       await forceSync();
 
@@ -310,7 +315,7 @@ export const BusinessOnboardingModal: React.FC<BusinessOnboardingModalProps> = (
                     type="text"
                     value={businessName}
                     onChange={e => setBusinessName(e.target.value)}
-                    placeholder="e.g. Kiid From Dream Seafood & Cold Room"
+                    placeholder="e.g. SmartSales Seafood & Cold Room"
                     className="w-full bg-slate-800/80 border border-slate-700 rounded-xl pl-10 pr-4 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 transition-all"
                     autoFocus
                   />
@@ -369,6 +374,25 @@ export const BusinessOnboardingModal: React.FC<BusinessOnboardingModalProps> = (
                   />
                 </div>
               </div>
+
+              {isAuthenticated && activeStaff?.role === 'Super Admin' && (
+                <label className="flex items-center justify-between p-3.5 rounded-xl bg-indigo-950/40 border border-indigo-500/40 cursor-pointer">
+                  <div>
+                    <div className="text-xs font-bold text-indigo-200">
+                      Grant Multi-Branch Creation Permission
+                    </div>
+                    <div className="text-[11px] text-indigo-300/80">
+                      Allow this store's administrator to create additional branches (`can_create_branches`)
+                    </div>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={canCreateBranches}
+                    onChange={e => setCanCreateBranches(e.target.checked)}
+                    className="w-4 h-4 rounded border-indigo-500 bg-slate-900 text-indigo-500"
+                  />
+                </label>
+              )}
             </div>
           )}
 

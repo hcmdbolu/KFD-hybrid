@@ -212,7 +212,7 @@ export const BulkImportModal: React.FC<BulkImportModalProps> = ({ isOpen, onClos
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.setAttribute('download', `kiidfromdream_product_import_template.csv`);
+    link.setAttribute('download', `smartsales_product_import_template.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);

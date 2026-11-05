@@ -16,10 +16,12 @@ import {
   ChevronDown,
   Check,
   Cloud,
-  CloudOff
+  CloudOff,
+  FileText
 } from 'lucide-react';
 import { ROLE_BADGES } from '../utils/rbac';
 import { TenantConfig } from '../types';
+import { getApiUrl } from '../utils/apiClient';
 
 interface AppHeaderProps {
   currentTab: string;
@@ -28,9 +30,14 @@ interface AppHeaderProps {
   onToggleSidebar?: () => void;
   onToggleMobileMenu: () => void;
   onOpenNewBusinessModal?: () => void;
+  onOpenZReportModal?: () => void;
 }
 
 const TAB_TITLES: Record<string, { title: string; subtitle: string }> = {
+  saas_admin: {
+    title: 'SmartSales SaaS Super Admin Control Center',
+    subtitle: 'Global multi-tenant store directory, branch creation permissions, and store/branch activation governance.',
+  },
   pos: {
     title: 'POS Sales Terminal',
     subtitle: 'High-speed counter transactions, weight scale adjustments, and split tender settlements.',
@@ -92,6 +99,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   onToggleSidebar,
   onToggleMobileMenu,
   onOpenNewBusinessModal,
+  onOpenZReportModal,
 }) => {
   const { 
     activeStaff, 
@@ -99,6 +107,8 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
     expiringSoonCount, 
     currentStoreId,
     setCurrentStoreId,
+    currentBranchId,
+    setCurrentBranchId,
     syncEngineStatus,
     triggerOutboxFlush,
     forceSync,
@@ -112,6 +122,8 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   const [currentTime, setCurrentTime] = useState<string>('');
   const [isStoreDropdownOpen, setIsStoreDropdownOpen] = useState(false);
   const [tenantsList, setTenantsList] = useState<TenantConfig[]>([]);
+  const [newBranchName, setNewBranchName] = useState('');
+  const [isCreatingBranch, setIsCreatingBranch] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   const isCashier = activeStaff.role === 'Cashier';
@@ -139,7 +151,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   useEffect(() => {
     const fetchTenants = async () => {
       try {
-        const res = await fetch('/api/v1/tenants');
+        const res = await fetch(getApiUrl('/api/v1/tenants'));
         if (res.ok) {
           const data = await res.json();
           if (data && Array.isArray(data.tenants)) {
@@ -165,7 +177,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   }, []);
 
   const meta = TAB_TITLES[currentTab] || {
-    title: 'KiidFromDream POS',
+    title: 'SmartSales POS',
     subtitle: 'Retail Counter & Point of Sale Management',
   };
 
@@ -323,19 +335,116 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
                   )}
                 </div>
 
-                {['Admin', 'Super Admin'].includes(activeStaff.role) && onOpenNewBusinessModal && (
+                {currentTenantObj?.branches && currentTenantObj.branches.length > 0 && (
                   <div className="mt-2 pt-1.5 border-t border-slate-800">
+                    <div className="px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                      Branches ({currentTenantObj.business_name})
+                    </div>
+                    <div className="max-h-32 overflow-y-auto space-y-1">
+                      {currentTenantObj.branches.map(b => {
+                        const isBranchSelected = currentBranchId === b.branch_id;
+                        return (
+                          <div
+                            key={b.branch_id}
+                            onClick={() => {
+                              if (b.status === 'DEACTIVATED' && activeStaff.role !== 'Super Admin') return;
+                              setCurrentBranchId(b.branch_id);
+                              setIsStoreDropdownOpen(false);
+                            }}
+                            className={`flex items-center justify-between px-2.5 py-1.5 rounded-lg text-[11px] ${
+                              b.status === 'DEACTIVATED'
+                                ? 'opacity-50 cursor-not-allowed text-rose-400'
+                                : isBranchSelected
+                                  ? 'bg-emerald-950/80 border border-emerald-500/40 text-emerald-300 cursor-pointer'
+                                  : 'hover:bg-slate-800 text-slate-300 cursor-pointer'
+                            }`}
+                          >
+                            <span className="truncate">{b.name}</span>
+                            <span className="text-[9px] font-mono">
+                              {b.status === 'DEACTIVATED' ? 'DEACTIVATED' : isBranchSelected ? 'ACTIVE' : ''}
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {activeStaff.role === 'Admin' && currentTenantObj?.can_create_branches && (
+                  <div className="mt-2 pt-1.5 border-t border-slate-800 space-y-1.5">
+                    <div className="px-1 text-[10px] font-bold uppercase tracking-wider text-emerald-400">
+                      + Create Store Branch
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <input
+                        type="text"
+                        value={newBranchName}
+                        onChange={e => setNewBranchName(e.target.value)}
+                        placeholder="New branch name..."
+                        className="flex-1 bg-slate-800 border border-slate-700 rounded-lg px-2 py-1.5 text-[11px] text-white placeholder:text-slate-500 focus:outline-none focus:border-emerald-500"
+                      />
+                      <button
+                        type="button"
+                        disabled={isCreatingBranch || !newBranchName.trim()}
+                        onClick={async () => {
+                          if (!newBranchName.trim()) return;
+                          setIsCreatingBranch(true);
+                          try {
+                            const token = localStorage.getItem('smartsales_auth_token_v2') || '';
+                            const res = await fetch(getApiUrl(`/api/v1/tenants/${encodeURIComponent(currentStoreId)}/branches`), {
+                              method: 'POST',
+                              headers: {
+                                'Content-Type': 'application/json',
+                                'Authorization': token ? `Bearer ${token}` : '',
+                                'x-session-token': token,
+                              },
+                              body: JSON.stringify({ name: newBranchName.trim() }),
+                            });
+                            const data = await res.json();
+                            if (res.ok && data.success && data.tenant) {
+                              setTenantsList(prev => prev.map(t => (t.store_id === currentStoreId ? data.tenant : t)));
+                              if (data.branch?.branch_id) {
+                                setCurrentBranchId(data.branch.branch_id);
+                              }
+                              setNewBranchName('');
+                            }
+                          } catch {}
+                          setIsCreatingBranch(false);
+                        }}
+                        className="px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-[11px] disabled:opacity-40 cursor-pointer"
+                      >
+                        Add
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {activeStaff.role === 'Super Admin' && (
+                  <div className="mt-2 pt-1.5 border-t border-slate-800 space-y-1.5">
                     <button
                       type="button"
                       onClick={() => {
                         setIsStoreDropdownOpen(false);
-                        onOpenNewBusinessModal();
+                        setCurrentTab('saas_admin');
                       }}
-                      className="w-full flex items-center justify-center gap-1.5 py-2 px-3 rounded-lg bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white font-semibold text-[11px] shadow-sm transition-all"
+                      className="w-full flex items-center justify-center gap-1.5 py-2 px-3 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-[11px] shadow-sm transition-all cursor-pointer"
                     >
-                      <Plus className="w-3.5 h-3.5" />
-                      <span>Register New Store / Branch</span>
+                      <LayoutDashboard className="w-3.5 h-3.5" />
+                      <span>Open Super Admin Control Center</span>
                     </button>
+                    {onOpenNewBusinessModal && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsStoreDropdownOpen(false);
+                          onOpenNewBusinessModal();
+                        }}
+                        className="w-full flex items-center justify-center gap-1.5 py-2 px-3 rounded-lg bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white font-semibold text-[11px] shadow-sm transition-all cursor-pointer"
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                        <span>Register New Store</span>
+                      </button>
+                    )}
                   </div>
                 )}
               </div>
@@ -395,6 +504,19 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
 
             <RefreshCw className={`w-3 h-3 text-slate-500 ${syncEngineStatus.isSyncing ? 'animate-spin text-cyan-600' : ''}`} />
           </div>
+
+          {/* End-of-Day Z-Report Quick Button (Manager / Admin / Super Admin) */}
+          {['Manager', 'Admin', 'Super Admin'].includes(activeStaff.role) && onOpenZReportModal && (
+            <button
+              type="button"
+              onClick={onOpenZReportModal}
+              className="hidden md:flex items-center space-x-1.5 bg-slate-900 hover:bg-slate-800 text-white px-2.5 py-1.5 rounded-xl border border-slate-700 text-[11px] font-bold transition-colors cursor-pointer"
+              title="Generate End-of-Day Z-Report & WhatsApp/Email Digest"
+            >
+              <FileText className="w-3.5 h-3.5 text-emerald-400" />
+              <span>Z-Report</span>
+            </button>
+          )}
 
           {/* Live Clock */}
           <div className="hidden xl:flex items-center space-x-1.5 text-slate-600 bg-slate-100 px-3 py-1.5 rounded-xl border border-slate-200/80 font-mono text-[11px]">

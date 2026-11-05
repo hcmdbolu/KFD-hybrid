@@ -7,14 +7,16 @@ export interface TenantRequest extends Request {
     staffId?: string;
     role?: string;
     storeId?: string;
+    branchId?: string;
     permissions?: string[];
   };
   storeId: string;
+  branchId?: string;
 }
 
 /**
  * Multi-tenant JWT context extraction middleware.
- * Verifies bearer token, extracts tenant `store_id`, and sets `req.storeId`.
+ * Verifies bearer token, extracts tenant `store_id` and `branch_id`, and sets `req.storeId` & `req.branchId`.
  */
 export function tenantContextMiddleware(req: Request, _res: Response, next: NextFunction) {
   const authHeader = req.headers['authorization'];
@@ -22,17 +24,25 @@ export function tenantContextMiddleware(req: Request, _res: Response, next: Next
     ? authHeader.slice(7)
     : (req.headers['x-session-token'] as string);
   const headerStoreId = (req.headers['x-store-id'] as string) || (req.query.store_id as string);
+  const headerBranchId = (req.headers['x-branch-id'] as string) || (req.query.branch_id as string);
 
   if (token) {
     const verified = verifySessionToken(token);
     if (verified.valid) {
       (req as TenantRequest).user = verified;
-      (req as TenantRequest).storeId = verified.storeId || headerStoreId || 'store_default';
+      // Allow Super Admin to target any requested store via x-store-id header
+      if (verified.role === 'Super Admin' && headerStoreId) {
+        (req as TenantRequest).storeId = headerStoreId;
+      } else {
+        (req as TenantRequest).storeId = verified.storeId || headerStoreId || 'store_default';
+      }
+      (req as TenantRequest).branchId = headerBranchId || verified.branchId || 'branch_main';
       return next();
     }
   }
 
   (req as TenantRequest).storeId = headerStoreId || 'store_default';
+  (req as TenantRequest).branchId = headerBranchId || 'branch_main';
   next();
 }
 
@@ -70,7 +80,7 @@ export function requireTenantRole(...allowedRoles: string[]) {
       return next();
     }
 
-    if (tReq.user?.role && allowedRoles.includes(tReq.user.role)) {
+    if (tReq.user?.role && (tReq.user.role === 'Super Admin' || allowedRoles.includes(tReq.user.role))) {
       return next();
     }
 
@@ -80,4 +90,3 @@ export function requireTenantRole(...allowedRoles: string[]) {
     });
   };
 }
-

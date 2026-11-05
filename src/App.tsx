@@ -1,31 +1,33 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, Suspense, lazy } from 'react';
 import { PosProvider, usePos } from './context/PosContext';
 import { Sidebar } from './components/Sidebar';
 import { AppHeader } from './components/AppHeader';
 import { PosTerminal } from './components/pos/PosTerminal';
-import { InventoryManager } from './components/inventory/InventoryManager';
 import { SalesHistoryManager } from './components/sales/SalesHistoryManager';
-import { CustomerManager } from './components/customers/CustomerManager';
-import { SupplierAndPOManager } from './components/suppliers/SupplierAndPOManager';
-import { ReportingDashboard } from './components/reports/ReportingDashboard';
-import { AuditLogManager } from './components/security/AuditLogManager';
 import { ReceiptModal } from './components/receipt/ReceiptModal';
 import { RefundModal } from './components/refund/RefundModal';
 import { LoginAuthModal } from './components/auth/LoginAuthModal';
 import { StaffManagerModal } from './components/admin/StaffManagerModal';
-import { StaffAndRolesManager } from './components/admin/StaffAndRolesManager';
 import { FactoryResetModal } from './components/admin/FactoryResetModal';
 import { BackupRestoreModal } from './components/admin/BackupRestoreModal';
-import { LegacyDataMigrationModal } from './components/admin/LegacyDataMigrationModal';
 import { BusinessOnboardingModal } from './components/auth/BusinessOnboardingModal';
-import { CashReconciliationManager } from './components/finance/CashReconciliationManager';
-import { PosTerminalSetupManager } from './components/pos/PosTerminalSetupManager';
-import { CashDrawerTreasuryManager } from './components/finance/CashDrawerTreasuryManager';
 import { CycleCountModal } from './components/inventory/CycleCountModal';
-import { CycleCountManager } from './components/inventory/CycleCountManager';
 import { StockTransferModal } from './components/inventory/StockTransferModal';
-import { ReceiptBrandingManager } from './components/admin/ReceiptBrandingManager';
-import { TerminalFleetManager } from './components/admin/TerminalFleetManager';
+import { ZReportModal } from './components/reports/ZReportModal';
+
+// Code-Split Back-Office & SaaS Governance Modules
+const SuperAdminDashboard = lazy(() => import('./components/admin/SuperAdminDashboard').then(m => ({ default: m.SuperAdminDashboard })));
+const InventoryManager = lazy(() => import('./components/inventory/InventoryManager').then(m => ({ default: m.InventoryManager })));
+const CustomerManager = lazy(() => import('./components/customers/CustomerManager').then(m => ({ default: m.CustomerManager })));
+const SupplierAndPOManager = lazy(() => import('./components/suppliers/SupplierAndPOManager').then(m => ({ default: m.SupplierAndPOManager })));
+const ReportingDashboard = lazy(() => import('./components/reports/ReportingDashboard').then(m => ({ default: m.ReportingDashboard })));
+const AuditLogManager = lazy(() => import('./components/security/AuditLogManager').then(m => ({ default: m.AuditLogManager })));
+const StaffAndRolesManager = lazy(() => import('./components/admin/StaffAndRolesManager').then(m => ({ default: m.StaffAndRolesManager })));
+const LegacyDataMigrationModal = lazy(() => import('./components/admin/LegacyDataMigrationModal').then(m => ({ default: m.LegacyDataMigrationModal })));
+const CashDrawerTreasuryManager = lazy(() => import('./components/finance/CashDrawerTreasuryManager').then(m => ({ default: m.CashDrawerTreasuryManager })));
+const CycleCountManager = lazy(() => import('./components/inventory/CycleCountManager').then(m => ({ default: m.CycleCountManager })));
+const ReceiptBrandingManager = lazy(() => import('./components/admin/ReceiptBrandingManager').then(m => ({ default: m.ReceiptBrandingManager })));
+const TerminalFleetManager = lazy(() => import('./components/admin/TerminalFleetManager').then(m => ({ default: m.TerminalFleetManager })));
 import { SaleTransaction, UserRole } from './types';
 import { PanelLeftOpen, Lock } from 'lucide-react';
 import { ErrorBoundary } from './components/common/ErrorBoundary';
@@ -55,7 +57,7 @@ function MainApp() {
   // Persistent side panel hidden state
   const [sidebarHidden, setSidebarHidden] = useState<boolean>(() => {
     try {
-      const saved = localStorage.getItem('kiidfromdream_sidebar_hidden_v1');
+      const saved = localStorage.getItem('smartsales_sidebar_hidden_v1');
       return saved === 'true';
     } catch {
       return false;
@@ -64,14 +66,14 @@ function MainApp() {
 
   useEffect(() => {
     try {
-      localStorage.setItem('kiidfromdream_sidebar_hidden_v1', String(sidebarHidden));
+      localStorage.setItem('smartsales_sidebar_hidden_v1', String(sidebarHidden));
     } catch {}
   }, [sidebarHidden]);
 
-  // SuperAdmin accounts are restricted from daily POS floor sales; redirect default landing to executive reports
+  // SuperAdmin accounts land on the SmartSales Multi-Tenant SaaS Control Center
   useEffect(() => {
     if (activeStaff.role === 'Super Admin' && currentTab === 'pos') {
-      setCurrentTab('reports');
+      setCurrentTab('saas_admin');
     }
   }, [activeStaff.role, currentTab]);
 
@@ -109,6 +111,7 @@ function MainApp() {
   const [isStockTransferOpen, setIsStockTransferOpen] = useState(false);
   const [isStaffManagerOpen, setIsStaffManagerOpen] = useState(false);
   const [isNewBusinessModalOpen, setIsNewBusinessModalOpen] = useState(false);
+  const [isZReportModalOpen, setIsZReportModalOpen] = useState(false);
 
   // Cross-navigation states
   const [prefilledPo, setPrefilledPo] = useState<{ supplierId?: string; itemSn?: string }>({});
@@ -137,10 +140,10 @@ function MainApp() {
   useEffect(() => {
     const role = activeStaff.role;
     const restrictedTabsForRole: Record<UserRole, string[]> = {
-      Cashier: ['inventory', 'suppliers', 'reports', 'audit', 'staff', 'treasury', 'reconciliation', 'pos_setup', 'customers', 'receipt_settings', 'fleet'],
-      Supervisor: ['reports', 'audit', 'staff', 'treasury', 'reconciliation', 'pos_setup', 'receipt_settings', 'fleet'],
-      Manager: ['staff'],
-      Admin: [],
+      Cashier: ['saas_admin', 'inventory', 'suppliers', 'reports', 'audit', 'staff', 'treasury', 'reconciliation', 'pos_setup', 'customers', 'receipt_settings', 'fleet'],
+      Supervisor: ['saas_admin', 'reports', 'audit', 'staff', 'treasury', 'reconciliation', 'pos_setup', 'receipt_settings', 'fleet'],
+      Manager: ['saas_admin', 'staff'],
+      Admin: ['saas_admin'],
       'Super Admin': [],
     };
     if (restrictedTabsForRole[role]?.includes(currentTab)) {
@@ -151,14 +154,21 @@ function MainApp() {
   const isCashier = activeStaff.role === 'Cashier';
   const isSupervisor = activeStaff.role === 'Supervisor';
 
-  // When not authenticated, render ONLY the login page (no app shell, no background)
+  // When not authenticated, render ONLY the login page + separated Store Registration wizard
   if (!isAuthenticated) {
     return (
-      <LoginAuthModal
-        isOpen={true}
-        onClose={closeLoginModal}
-        mode="LOGIN"
-      />
+      <>
+        <LoginAuthModal
+          isOpen={true}
+          onClose={closeLoginModal}
+          mode="LOGIN"
+          onOpenRegisterStore={() => setIsNewBusinessModalOpen(true)}
+        />
+        <BusinessOnboardingModal
+          isOpen={isNewBusinessModalOpen}
+          onClose={() => setIsNewBusinessModalOpen(false)}
+        />
+      </>
     );
   }
 
@@ -203,6 +213,7 @@ function MainApp() {
           onToggleSidebar={handleToggleSidebar}
           onToggleMobileMenu={() => setMobileMenuOpen(!mobileMenuOpen)}
           onOpenNewBusinessModal={() => setIsNewBusinessModalOpen(true)}
+          onOpenZReportModal={() => setIsZReportModalOpen(true)}
         />
 
         {/* Main Tab Content */}
@@ -212,6 +223,20 @@ function MainApp() {
             fallbackMessage="An unexpected issue occurred while rendering this module. You can return to the POS register safely."
             onReset={() => setCurrentTab('pos')}
           >
+            <Suspense
+              fallback={
+                <div className="p-12 text-center text-slate-500 text-xs font-semibold">
+                  Loading SmartSales module...
+                </div>
+              }
+            >
+            {currentTab === 'saas_admin' && activeStaff.role === 'Super Admin' && (
+              <SuperAdminDashboard
+                onOpenNewBusinessModal={() => setIsNewBusinessModalOpen(true)}
+                onInspectStore={() => setCurrentTab('reports')}
+              />
+            )}
+
             {currentTab === 'pos' && (
               <PosTerminal
                 onOpenCustomerModal={() => setCurrentTab('customers')}
@@ -280,6 +305,7 @@ function MainApp() {
             {currentTab === 'fleet' && !isCashier && !isSupervisor && (
               <TerminalFleetManager />
             )}
+            </Suspense>
           </ErrorBoundary>
         </main>
       </div>
@@ -347,7 +373,15 @@ function MainApp() {
       />
 
       {/* Legacy Data Migration & Third-Party Import Module */}
-      <LegacyDataMigrationModal />
+      <Suspense fallback={null}>
+        <LegacyDataMigrationModal />
+      </Suspense>
+
+      {/* End-of-Day Z-Report & Executive Digest Modal */}
+      <ZReportModal
+        isOpen={isZReportModalOpen}
+        onClose={() => setIsZReportModalOpen(false)}
+      />
 
       {/* New Multi-Tenant Business Onboarding Wizard */}
       <BusinessOnboardingModal

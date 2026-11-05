@@ -62,6 +62,11 @@ export class PosPostgresDatabase implements IPosDatabase {
         ALTER TABLE receipt_settings ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
         ALTER TABLE voided_orders ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW();
         ALTER TABLE voided_orders ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
+        ALTER TABLE tenants ADD COLUMN IF NOT EXISTS can_create_branches BOOLEAN NOT NULL DEFAULT FALSE;
+        ALTER TABLE employees ADD COLUMN IF NOT EXISTS branch_id TEXT DEFAULT 'branch_main';
+        ALTER TABLE sales ADD COLUMN IF NOT EXISTS branch_id TEXT DEFAULT 'branch_main';
+        ALTER TABLE products ADD COLUMN IF NOT EXISTS branch_id TEXT DEFAULT 'branch_main';
+        ALTER TABLE pos_terminals ADD COLUMN IF NOT EXISTS branch_id TEXT DEFAULT 'branch_main';
       `);
       console.log('[POSTGRES] Startup migrations verified.');
 
@@ -80,9 +85,12 @@ export class PosPostgresDatabase implements IPosDatabase {
     const client = await this.pool.connect();
     try {
       const effectiveStoreId = storeId || 'store_default';
-      await client.query("SELECT set_config('app.current_store_id', $1, true)", [effectiveStoreId]);
+      await client.query("SELECT set_config('app.current_store_id', $1, false)", [effectiveStoreId]);
       return await fn(client);
     } finally {
+      try {
+        await client.query("SELECT set_config('app.current_store_id', 'store_default', false)");
+      } catch {}
       client.release();
     }
   }
@@ -793,22 +801,38 @@ export class PosPostgresDatabase implements IPosDatabase {
   }
 
   /**
-   * Registers a new tenant and automatically provisions tailored vertical presets.
+   * Registers a new tenant and automatically provisions its Main Branch (HQ) and vertical presets.
    */
   public async registerTenant(params: {
     business_name: string;
     vertical?: string;
     currency?: string;
     phone?: string;
+    email?: string;
     address?: string;
     admin_name?: string;
     admin_username?: string;
     admin_pin?: string;
+    can_create_branches?: boolean;
   }): Promise<any> {
     const storeId = `store_${Date.now().toString(36)}_${Math.random().toString(36).substring(2, 6)}`;
     const vertical = (params.vertical || 'COLD_ROOM').toUpperCase();
     const currency = (params.currency || 'NGN').toUpperCase();
+    const canCreateBranches = Boolean(params.can_create_branches);
     const now = new Date().toISOString();
+
+    const mainBranch = {
+      branch_id: 'branch_main',
+      store_id: storeId,
+      name: 'Main Branch (HQ)',
+      address: params.address || 'Main Store Location',
+      phone: params.phone || '',
+      manager_name: params.admin_name || 'Store Owner',
+      is_main_branch: true,
+      status: 'ACTIVE',
+      created_at: now,
+      updated_at: now,
+    };
 
     const tenantRecord = {
       store_id: storeId,
@@ -816,8 +840,11 @@ export class PosPostgresDatabase implements IPosDatabase {
       vertical,
       currency,
       phone: params.phone || '',
+      email: params.email || '',
       address: params.address || '',
       status: 'ACTIVE',
+      can_create_branches: canCreateBranches,
+      branches: [mainBranch],
       settings: {
         vertical,
         currency,
@@ -832,39 +859,59 @@ export class PosPostgresDatabase implements IPosDatabase {
       await client.query('BEGIN');
       // Create Tenant row
       await client.query(`
-        INSERT INTO tenants (store_id, business_name, vertical, currency, phone, address, status, settings, created_at, updated_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW())
+        INSERT INTO tenants (store_id, business_name, vertical, currency, phone, email, address, status, can_create_branches, settings, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW(), NOW())
       `, [
         storeId,
         params.business_name,
         vertical,
         currency,
         params.phone || null,
+        params.email || null,
         params.address || null,
         'ACTIVE',
+        canCreateBranches,
         JSON.stringify(tenantRecord.settings),
       ]);
 
       // Set RLS scope to newly created tenant
       await client.query("SELECT set_config('app.current_store_id', $1, true)", [storeId]);
 
-      // Seed Store Manager/Admin
+      // Seed Default Main Branch (HQ)
+      await client.query(`
+        INSERT INTO branches (branch_id, store_id, name, address, phone, manager_name, is_main_branch, status, data, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $6, TRUE, 'ACTIVE', $7, NOW(), NOW())
+        ON CONFLICT (store_id, branch_id) DO NOTHING
+      `, [
+        mainBranch.branch_id,
+        storeId,
+        mainBranch.name,
+        mainBranch.address,
+        mainBranch.phone,
+        mainBranch.manager_name,
+        JSON.stringify(mainBranch),
+      ]);
+
+      // Seed Store Manager/Admin linked to store_id and branch_main
       const adminPin = params.admin_pin || '1234';
       const adminHashedPin = hashPin(adminPin);
       const adminStaff = {
         staff_id: `STAFF-${storeId.slice(-4).toUpperCase()}-001`,
         staff_name: params.admin_name || 'Store Owner',
-        username: params.admin_username || 'owner',
+        username: params.admin_username || 'admin',
         role: 'Admin',
         pin: adminHashedPin,
+        password: adminHashedPin,
+        phone_number: params.phone || '',
         shift_time: 'Full Day',
         date_hired: now.slice(0, 10),
         status: 'Active',
         store_id: storeId,
+        branch_id: 'branch_main',
       };
       await client.query(`
-        INSERT INTO employees (staff_id, store_id, staff_name, username, role, pin, status, data, created_at, updated_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW())
+        INSERT INTO employees (staff_id, store_id, branch_id, staff_name, username, role, pin, status, data, created_at, updated_at)
+        VALUES ($1, $2, 'branch_main', $3, $4, $5, $6, $7, $8, NOW(), NOW())
       `, [adminStaff.staff_id, storeId, adminStaff.staff_name, adminStaff.username, adminStaff.role, adminStaff.pin, adminStaff.status, JSON.stringify(adminStaff)]);
 
       // Seed Vertical-Specific Categories & Presets
@@ -946,12 +993,13 @@ export class PosPostgresDatabase implements IPosDatabase {
         status: 'Active',
         is_default: 1,
         store_id: storeId,
+        branch_id: 'branch_main',
         app_version: '2.4.0',
         created_at: now,
       };
       await client.query(`
-        INSERT INTO pos_terminals (id, store_id, name, type, status, is_default, app_version, data, created_at, updated_at)
-        VALUES ($1, $2, $3, $4, $5, 1, $6, $7, NOW(), NOW())
+        INSERT INTO pos_terminals (id, store_id, branch_id, name, type, status, is_default, app_version, data, created_at, updated_at)
+        VALUES ($1, $2, 'branch_main', $3, $4, $5, 1, $6, $7, NOW(), NOW())
       `, [terminalData.id, storeId, terminalData.name, terminalData.type, terminalData.status, terminalData.app_version, JSON.stringify(terminalData)]);
 
       await client.query('COMMIT');
@@ -974,21 +1022,155 @@ export class PosPostgresDatabase implements IPosDatabase {
   }
 
   public async listTenants(): Promise<any[]> {
-    const res = await this.pool.query('SELECT store_id, business_name, vertical, currency, phone, address, status, settings, created_at FROM tenants ORDER BY created_at ASC');
-    return res.rows.map((r: any) => ({
-      ...r,
-      settings: typeof r.settings === 'string' ? JSON.parse(r.settings) : r.settings,
-    }));
+    return this.withTenant('system_superadmin', async (client) => {
+      const res = await client.query('SELECT store_id, business_name, vertical, currency, phone, email, address, status, can_create_branches, settings, created_at, updated_at FROM tenants ORDER BY created_at ASC');
+      let allBranches: any[] = [];
+      try {
+        const brRes = await client.query('SELECT branch_id, store_id, name, address, phone, manager_name, is_main_branch, status, created_at, updated_at FROM branches ORDER BY is_main_branch DESC, created_at ASC');
+        allBranches = brRes.rows;
+      } catch {}
+
+      return res.rows.map((r: any) => {
+        const storeBranches = allBranches.filter((b: any) => b.store_id === r.store_id);
+        if (storeBranches.length === 0) {
+          storeBranches.push({
+            branch_id: 'branch_main',
+            store_id: r.store_id,
+            name: 'Main Branch (HQ)',
+            address: r.address || '',
+            phone: r.phone || '',
+            is_main_branch: true,
+            status: 'ACTIVE',
+            created_at: r.created_at,
+          });
+        }
+        return {
+          ...r,
+          can_create_branches: Boolean(r.can_create_branches),
+          branches: storeBranches,
+          settings: typeof r.settings === 'string' ? JSON.parse(r.settings) : r.settings,
+        };
+      });
+    });
   }
 
   public async getTenant(storeId: string): Promise<any | null> {
-    const res = await this.pool.query('SELECT * FROM tenants WHERE store_id = $1 LIMIT 1', [storeId]);
-    if (res.rows.length === 0) return null;
-    const r = res.rows[0];
-    return {
-      ...r,
-      settings: typeof r.settings === 'string' ? JSON.parse(r.settings) : r.settings,
+    return this.withTenant(storeId, async (client) => {
+      const res = await client.query('SELECT * FROM tenants WHERE store_id = $1 LIMIT 1', [storeId]);
+      if (res.rows.length === 0) return null;
+      const r = res.rows[0];
+      const branches = await this.listBranches(storeId);
+      return {
+        ...r,
+        can_create_branches: Boolean(r.can_create_branches),
+        branches,
+        settings: typeof r.settings === 'string' ? JSON.parse(r.settings) : r.settings,
+      };
+    });
+  }
+
+  public async updateTenantStatus(storeId: string, status: 'ACTIVE' | 'DEACTIVATED'): Promise<any> {
+    await this.pool.query(
+      'UPDATE tenants SET status = $1, updated_at = NOW() WHERE store_id = $2',
+      [status, storeId]
+    );
+    await this.touchVersion();
+    return this.getTenant(storeId);
+  }
+
+  public async updateTenantPermissions(storeId: string, canCreateBranches: boolean): Promise<any> {
+    await this.pool.query(
+      'UPDATE tenants SET can_create_branches = $1, updated_at = NOW() WHERE store_id = $2',
+      [Boolean(canCreateBranches), storeId]
+    );
+    await this.touchVersion();
+    return this.getTenant(storeId);
+  }
+
+  public async listBranches(storeId: string = 'store_default'): Promise<any[]> {
+    return this.withTenant(storeId, async (client) => {
+      const res = storeId === '*' || storeId === 'system_superadmin'
+        ? await client.query('SELECT branch_id, store_id, name, address, phone, manager_name, is_main_branch, status, created_at, updated_at FROM branches ORDER BY is_main_branch DESC, created_at ASC')
+        : await client.query('SELECT branch_id, store_id, name, address, phone, manager_name, is_main_branch, status, created_at, updated_at FROM branches WHERE store_id = $1 ORDER BY is_main_branch DESC, created_at ASC', [storeId]);
+      if (res.rows.length === 0 && storeId !== '*' && storeId !== 'system_superadmin') {
+        const defaultBranch = {
+          branch_id: 'branch_main',
+          store_id: storeId,
+          name: 'Main Branch (HQ)',
+          address: '',
+          phone: '',
+          manager_name: 'Store Manager',
+          is_main_branch: true,
+          status: 'ACTIVE',
+          created_at: new Date().toISOString(),
+        };
+        try {
+          await client.query(`
+            INSERT INTO branches (branch_id, store_id, name, address, phone, manager_name, is_main_branch, status, data, created_at, updated_at)
+            VALUES ($1, $2, $3, $4, $5, $6, TRUE, 'ACTIVE', $7, NOW(), NOW())
+            ON CONFLICT (store_id, branch_id) DO NOTHING
+          `, [defaultBranch.branch_id, storeId, defaultBranch.name, defaultBranch.address, defaultBranch.phone, defaultBranch.manager_name, JSON.stringify(defaultBranch)]);
+        } catch {}
+        return [defaultBranch];
+      }
+      return res.rows;
+    });
+  }
+
+  public async createBranch(params: {
+    store_id: string;
+    name: string;
+    address?: string;
+    phone?: string;
+    manager_name?: string;
+    is_main_branch?: boolean;
+  }): Promise<any> {
+    const storeId = params.store_id || 'store_default';
+    const branchId = `br_${Date.now().toString(36)}_${Math.random().toString(36).substring(2, 5)}`;
+    const now = new Date().toISOString();
+    const branchObj = {
+      branch_id: branchId,
+      store_id: storeId,
+      name: params.name.trim(),
+      address: params.address || '',
+      phone: params.phone || '',
+      manager_name: params.manager_name || '',
+      is_main_branch: Boolean(params.is_main_branch),
+      status: 'ACTIVE' as const,
+      created_at: now,
+      updated_at: now,
     };
+
+    await this.withTenant(storeId, async (client) => {
+      await client.query(`
+        INSERT INTO branches (branch_id, store_id, name, address, phone, manager_name, is_main_branch, status, data, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, 'ACTIVE', $8, NOW(), NOW())
+      `, [
+        branchId,
+        storeId,
+        branchObj.name,
+        branchObj.address,
+        branchObj.phone,
+        branchObj.manager_name,
+        branchObj.is_main_branch,
+        JSON.stringify(branchObj),
+      ]);
+    });
+
+    await this.touchVersion();
+    return branchObj;
+  }
+
+  public async updateBranchStatus(storeId: string, branchId: string, status: 'ACTIVE' | 'DEACTIVATED'): Promise<any> {
+    return this.withTenant(storeId, async (client) => {
+      await client.query(
+        'UPDATE branches SET status = $1, updated_at = NOW() WHERE store_id = $2 AND branch_id = $3',
+        [status, storeId, branchId]
+      );
+      const res = await client.query('SELECT * FROM branches WHERE store_id = $1 AND branch_id = $2 LIMIT 1', [storeId, branchId]);
+      await this.touchVersion();
+      return res.rows[0] || null;
+    });
   }
 
   public async processSyncPush(params: {

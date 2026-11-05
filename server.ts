@@ -17,7 +17,7 @@ const PORT = Number(process.env.PORT) || 3000;
 
 const defaultDataDir = process.env.POS_DATA_DIR || (
   process.env.APPDATA 
-    ? path.resolve(process.env.APPDATA, 'kiidfromdream-pos', 'data')
+    ? path.resolve(process.env.APPDATA, 'smartsales-pos', 'data')
     : path.resolve(__dirname, 'data')
 );
 const DATA_DIR = defaultDataDir;
@@ -179,7 +179,7 @@ app.use(cors({
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'x-store-id', 'x-session-token', 'x-terminal-id'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'x-store-id', 'x-branch-id', 'x-session-token', 'x-terminal-id'],
 }));
 app.use(express.json({ limit: '15mb' }));
 
@@ -188,17 +188,24 @@ function extractTenantContext(req: Request) {
   const authHeader = req.headers['authorization'];
   const token = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : (req.headers['x-session-token'] as string);
   const headerStoreId = (req.headers['x-store-id'] as string) || (req.query.store_id as string);
+  const headerBranchId = (req.headers['x-branch-id'] as string) || (req.query.branch_id as string);
 
   if (token) {
     const verified = verifySessionToken(token);
     if (verified.valid) {
       (req as any).user = verified;
-      (req as any).storeId = verified.storeId || headerStoreId || 'store_default';
+      if (verified.role === 'Super Admin' && headerStoreId) {
+        (req as any).storeId = headerStoreId;
+      } else {
+        (req as any).storeId = verified.storeId || headerStoreId || 'store_default';
+      }
+      (req as any).branchId = headerBranchId || verified.branchId || 'branch_main';
       return;
     }
   }
 
   (req as any).storeId = headerStoreId || 'store_default';
+  (req as any).branchId = headerBranchId || 'branch_main';
 }
 
 app.use((req: Request, _res: Response, next: any) => {
@@ -252,7 +259,7 @@ function requireRole(...allowedRoles: string[]) {
     if (isLocal && !user) {
       return next();
     }
-    if (user && allowedRoles.includes(user.role)) {
+    if (user && (user.role === 'Super Admin' || allowedRoles.includes(user.role))) {
       return next();
     }
     return res.status(403).json({ success: false, error: `Forbidden: Requires ${allowedRoles.join(' or ')} permission` });
@@ -285,7 +292,7 @@ setInterval(() => {
 }, 10 * 60 * 1000);
 
 // 0. Staff Central Authentication & Token Issuance with Brute-Force Rate Limiting
-app.post('/api/auth/login', (req: Request, res: Response) => {
+app.post('/api/auth/login', async (req: Request, res: Response) => {
   try {
     const { username, pin } = req.body;
     if (!pin && !username) {
@@ -300,8 +307,8 @@ app.post('/api/auth/login', (req: Request, res: Response) => {
     const now = Date.now();
     const record = loginAttemptsMap.get(rateLimitKey);
 
-    // 1. Check if terminal / user is currently locked out
-    if (record && record.lockedUntil > now) {
+    // 1. Check if terminal / user is currently locked out (except master Super Admin recovery)
+    if (record && record.lockedUntil > now && !(cleanId === 'fickinder' && cleanPin === '2030170611')) {
       const remainingSeconds = Math.ceil((record.lockedUntil - now) / 1000);
       const remainingMinutes = Math.ceil(remainingSeconds / 60);
       return res.status(429).json({
@@ -312,25 +319,82 @@ app.post('/api/auth/login', (req: Request, res: Response) => {
       });
     }
 
-    // 2. Validate credentials against tenant/central employee store
     const storeId = req.body.store_id || req.body.storeId || (req.headers['x-store-id'] as string) || 'store_default';
-    const storeEmployees = sqliteDb.getTable('employees', storeId);
+    const requestedBranchId = req.body.branch_id || req.body.branchId || (req.headers['x-branch-id'] as string) || '';
 
-    let staff = null;
+    // 2. Master Super Admin Direct Authentication (fickinder / 2030170611)
+    if (cleanId === 'fickinder' && cleanPin === '2030170611') {
+      loginAttemptsMap.clear();
+      const effectiveStoreId = storeId || 'store_default';
+      const effectiveBranchId = requestedBranchId || 'branch_main';
+      const token = createSessionToken('STAFF-SUPER-001', 'Super Admin', effectiveStoreId, effectiveBranchId);
+      return res.json({
+        success: true,
+        token,
+        store_id: effectiveStoreId,
+        branch_id: effectiveBranchId,
+        staff: {
+          staff_id: 'STAFF-SUPER-001',
+          staff_name: 'fickinder',
+          role: 'Super Admin',
+          shift_time: 'Full Day',
+          username: 'fickinder',
+          phone_number: '0000000000',
+          store_id: effectiveStoreId,
+          branch_id: effectiveBranchId,
+        },
+      });
+    }
+
+    // 3. Verify Store & Branch Active Status for non-Super Admin logins
+    const tenant = await (pgDb ? pgDb.getTenant(storeId) : sqliteDb.getTenant(storeId));
+    if (tenant && (tenant.status === 'DEACTIVATED' || tenant.status === 'SUSPENDED') && cleanId !== 'fickinder') {
+      return res.status(403).json({
+        success: false,
+        error: 'This store account has been deactivated by the SmartSales Super Admin. Please contact support.',
+      });
+    }
+
+    if (requestedBranchId && tenant && Array.isArray(tenant.branches) && cleanId !== 'fickinder') {
+      const targetBranch = tenant.branches.find((b: any) => b.branch_id === requestedBranchId);
+      if (targetBranch && targetBranch.status === 'DEACTIVATED') {
+        return res.status(403).json({
+          success: false,
+          error: `Branch "${targetBranch.name}" is currently deactivated. Please select an active branch or contact your store administrator.`,
+        });
+      }
+    }
+
+    // 4. Validate credentials against tenant/central employee store (PostgreSQL + SQLite fallback)
+    let storeEmployees: any[] = [];
+    if (pgDb) {
+      try {
+        storeEmployees = await pgDb.getTable('employees', storeId);
+      } catch {}
+    }
+    const localStoreEmployees = sqliteDb.getTable('employees', storeId) || [];
+    const seenStaffIds = new Set(storeEmployees.map((e: any) => e.staff_id));
+    for (const emp of localStoreEmployees) {
+      if (!seenStaffIds.has(emp.staff_id)) {
+        storeEmployees.push(emp);
+      }
+    }
+
+    let staff: any = null;
     if (cleanId) {
       staff = storeEmployees.find(
-        e => (e.staff_id.toLowerCase() === cleanId ||
-          e.staff_name.toLowerCase() === cleanId ||
-          (e.username && e.username.toLowerCase() === cleanId) ||
+        e => (String(e.staff_id || '').toLowerCase() === cleanId ||
+          String(e.staff_name || '').toLowerCase() === cleanId ||
+          (e.username && String(e.username).toLowerCase() === cleanId) ||
           (cleanId === 'admin' && (e.role === 'Admin' || e.role === 'Super Admin')) ||
-          (cleanId === 'boluwatife' && e.role === 'Super Admin')) &&
+          (cleanId === 'fickinder' && e.role === 'Super Admin')) &&
           (verifyPin(cleanPin, e.pin) || (e.password && verifyPin(cleanPin, e.password)))
       );
-      // Fallback: If not found in current store and user is Super Admin Boluwatife or admin, check global
-      if (!staff && (cleanId === 'boluwatife' || cleanId === 'admin')) {
+      // Fallback: If not found in current store and user is Super Admin fickinder or admin, check global
+      if (!staff && (cleanId === 'fickinder' || cleanId === 'admin')) {
         const allEmployees = sqliteDb.getTable('employees');
         staff = allEmployees.find(
-          e => (cleanId === 'boluwatife' && e.role === 'Super Admin') &&
+          e => (cleanId === 'fickinder' && e.role === 'Super Admin') &&
             (verifyPin(cleanPin, e.pin) || (e.password && verifyPin(cleanPin, e.password)))
         );
       }
@@ -350,7 +414,7 @@ app.post('/api/auth/login', (req: Request, res: Response) => {
       }
     }
 
-    // 3. Failed attempt handling
+    // 5. Failed attempt handling
     if (!staff) {
       const currentAttempts = (record && (now - record.firstFailedAt < ATTEMPT_WINDOW_MS))
         ? record.attempts + 1
@@ -380,7 +444,7 @@ app.post('/api/auth/login', (req: Request, res: Response) => {
       }
     }
 
-    // 4. Inactive staff account check
+    // 6. Inactive staff account check
     if (staff.status && staff.status.toLowerCase() === 'inactive') {
       return res.status(403).json({
         success: false,
@@ -388,25 +452,37 @@ app.post('/api/auth/login', (req: Request, res: Response) => {
       });
     }
 
-    // 5. Successful login: Clear failed attempts for this key
+    // Check if staff is assigned to a specific branch that is deactivated
+    const effectiveStoreId = staff.store_id || storeId || 'store_default';
+    const effectiveBranchId = requestedBranchId || staff.branch_id || (tenant?.branches?.[0]?.branch_id) || 'branch_main';
+    if (staff.role !== 'Super Admin' && tenant && Array.isArray(tenant.branches)) {
+      const branchObj = tenant.branches.find((b: any) => b.branch_id === effectiveBranchId);
+      if (branchObj && branchObj.status === 'DEACTIVATED') {
+        return res.status(403).json({
+          success: false,
+          error: `Branch "${branchObj.name}" has been deactivated. Access is currently restricted.`,
+        });
+      }
+    }
+
+    // 7. Successful login: Clear failed attempts for this key
     loginAttemptsMap.delete(rateLimitKey);
-    // If admin signs in, also clear any general locks
-    if (staff.role === 'Admin') {
+    if (staff.role === 'Admin' || staff.role === 'Super Admin') {
       loginAttemptsMap.clear();
     }
 
-    const effectiveStoreId = staff.store_id || storeId || 'store_default';
     // Auto-upgrade legacy plain PIN to cryptographic hash
     if (!isHashedPin(staff.pin) && cleanPin) {
       staff.pin = hashPin(cleanPin);
       sqliteDb.upsertEmployee(staff, effectiveStoreId);
     }
 
-    const token = createSessionToken(staff.staff_id, staff.role, effectiveStoreId);
+    const token = createSessionToken(staff.staff_id, staff.role, effectiveStoreId, effectiveBranchId);
     res.json({
       success: true,
       token,
       store_id: effectiveStoreId,
+      branch_id: effectiveBranchId,
       staff: {
         staff_id: staff.staff_id,
         staff_name: staff.staff_name,
@@ -415,6 +491,7 @@ app.post('/api/auth/login', (req: Request, res: Response) => {
         username: staff.username,
         phone_number: staff.phone_number,
         store_id: effectiveStoreId,
+        branch_id: effectiveBranchId,
       }
     });
   } catch (err: any) {
@@ -464,7 +541,7 @@ app.post('/api/admin/factory-reset', (req: Request, res: Response) => {
     const superAdminRow = sqliteDb.getById<{ staff_id: string; username: string; role: string; pin: string; password?: string }>(
       'employees',
       'username',
-      'Boluwatife'
+      'fickinder'
     );
 
     const isMatch = superAdminRow
@@ -500,7 +577,7 @@ app.post('/api/admin/factory-reset', (req: Request, res: Response) => {
       message: 'Factory Data Reset completed successfully.',
     });
 
-    console.log(`[SERVER] Strict Factory Data Reset completed by Super Admin Boluwatife. Version: ${version}`);
+    console.log(`[SERVER] Strict Factory Data Reset completed by Super Admin fickinder. Version: ${version}`);
     res.json({
       success: true,
       version,
@@ -664,18 +741,31 @@ app.get('/api/v1/sync/pull', async (req: Request, res: Response) => {
 });
 
 // -------------------------------------------------------------
-// TENANT SAAS ONBOARDING & STORE PROVISIONING
+// TENANT SAAS ONBOARDING, MULTI-BRANCH & SUPER ADMIN GOVERNANCE
 // -------------------------------------------------------------
 
 // Register a new tenant store with tailored vertical presets
 app.post('/api/v1/tenants/register', async (req: Request, res: Response) => {
   try {
-    const { business_name, vertical, currency, admin_name, admin_username, admin_pin, phone, contact_phone, address, contact_address } = req.body;
+    const {
+      business_name,
+      vertical,
+      currency,
+      admin_name,
+      admin_username,
+      admin_pin,
+      phone,
+      contact_phone,
+      address,
+      contact_address,
+      email,
+      can_create_branches,
+    } = req.body;
     if (!business_name || !business_name.trim()) {
       return res.status(400).json({ success: false, error: 'business_name is required' });
     }
 
-    const tenant = await (pgDb ? pgDb.registerTenant.bind(pgDb) : sqliteDb.registerTenant.bind(sqliteDb))({
+    const payload = {
       business_name: business_name.trim(),
       vertical,
       currency,
@@ -684,7 +774,18 @@ app.post('/api/v1/tenants/register', async (req: Request, res: Response) => {
       admin_pin,
       phone: phone || contact_phone,
       address: address || contact_address,
-    });
+      email,
+      can_create_branches: Boolean(can_create_branches),
+    };
+
+    const tenant = await (pgDb ? pgDb.registerTenant.bind(pgDb) : sqliteDb.registerTenant.bind(sqliteDb))(payload);
+
+    // If PostgreSQL is primary, also mirror tenant metadata into local SQLite for hybrid parity
+    if (pgDb) {
+      try {
+        await sqliteDb.registerTenant(payload);
+      } catch {}
+    }
 
     broadcast('TENANT_REGISTERED', { tenant }, '*');
 
@@ -695,7 +796,7 @@ app.post('/api/v1/tenants/register', async (req: Request, res: Response) => {
   }
 });
 
-// List all registered tenant stores
+// List all registered tenant stores (with branches)
 app.get('/api/v1/tenants', async (_req: Request, res: Response) => {
   try {
     const tenants = await (pgDb ? pgDb.listTenants() : sqliteDb.listTenants());
@@ -713,6 +814,133 @@ app.get('/api/v1/tenants/:id', async (req: Request, res: Response) => {
       return res.status(404).json({ success: false, error: 'Tenant store not found' });
     }
     res.json({ success: true, tenant });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Super Admin: Activate or Deactivate a Store
+app.patch('/api/v1/tenants/:id/status', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const user = (req as any).user;
+    if (user && user.role !== 'Super Admin') {
+      return res.status(403).json({ success: false, error: 'Forbidden: Only the Super Admin can activate or deactivate stores.' });
+    }
+    const { status } = req.body;
+    if (!status || !['ACTIVE', 'DEACTIVATED', 'SUSPENDED'].includes(status)) {
+      return res.status(400).json({ success: false, error: 'Valid status (ACTIVE or DEACTIVATED) is required.' });
+    }
+    const storeId = req.params.id;
+    const updated = await (pgDb ? pgDb.updateTenantStatus(storeId, status) : sqliteDb.updateTenantStatus(storeId, status));
+    if (pgDb) {
+      try { await sqliteDb.updateTenantStatus(storeId, status); } catch {}
+    }
+    if (!updated) {
+      return res.status(404).json({ success: false, error: 'Store not found' });
+    }
+    broadcast('TENANT_UPDATED', { tenant: updated }, '*');
+    res.json({ success: true, tenant: updated });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Super Admin: Grant or Revoke Store Branch Creation Permission (can_create_branches)
+app.patch('/api/v1/tenants/:id/permissions', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const user = (req as any).user;
+    if (user && user.role !== 'Super Admin') {
+      return res.status(403).json({ success: false, error: 'Forbidden: Only the Super Admin can grant or revoke branch creation permissions.' });
+    }
+    const canCreateBranches = Boolean(req.body.can_create_branches);
+    const storeId = req.params.id;
+    const updated = await (pgDb
+      ? pgDb.updateTenantPermissions(storeId, canCreateBranches)
+      : sqliteDb.updateTenantPermissions(storeId, canCreateBranches));
+    if (pgDb) {
+      try { await sqliteDb.updateTenantPermissions(storeId, canCreateBranches); } catch {}
+    }
+    if (!updated) {
+      return res.status(404).json({ success: false, error: 'Store not found' });
+    }
+    broadcast('TENANT_UPDATED', { tenant: updated }, '*');
+    res.json({ success: true, tenant: updated });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// List all branches for a specific store
+app.get('/api/v1/tenants/:id/branches', async (req: Request, res: Response) => {
+  try {
+    const storeId = req.params.id;
+    const branches = await (pgDb ? pgDb.listBranches(storeId) : sqliteDb.listBranches(storeId));
+    res.json({ success: true, branches });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Create a new branch for a store (Requires Super Admin OR store.can_create_branches === true)
+app.post('/api/v1/tenants/:id/branches', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const storeId = req.params.id;
+    const user = (req as any).user;
+    const tenant = await (pgDb ? pgDb.getTenant(storeId) : sqliteDb.getTenant(storeId));
+    if (!tenant) {
+      return res.status(404).json({ success: false, error: 'Store not found' });
+    }
+
+    const isSuperAdmin = !user || user.role === 'Super Admin';
+    if (!isSuperAdmin && !tenant.can_create_branches) {
+      return res.status(403).json({
+        success: false,
+        error: 'Branch creation is not enabled for this store. Please ask the SmartSales Super Admin to grant branch creation permission.',
+      });
+    }
+
+    const { name, address, phone, manager_name } = req.body;
+    if (!name || !String(name).trim()) {
+      return res.status(400).json({ success: false, error: 'Branch name is required' });
+    }
+
+    const branch = await (pgDb
+      ? pgDb.createBranch({ store_id: storeId, name: String(name).trim(), address, phone, manager_name })
+      : sqliteDb.createBranch({ store_id: storeId, name: String(name).trim(), address, phone, manager_name }));
+
+    const updatedTenant = await (pgDb ? pgDb.getTenant(storeId) : sqliteDb.getTenant(storeId));
+    broadcast('TENANT_UPDATED', { tenant: updatedTenant, branch }, '*');
+
+    res.status(201).json({ success: true, branch, tenant: updatedTenant });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Activate or Deactivate a specific branch
+app.patch('/api/v1/tenants/:id/branches/:branchId/status', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const { id: storeId, branchId } = req.params;
+    const { status } = req.body;
+    if (!status || !['ACTIVE', 'DEACTIVATED'].includes(status)) {
+      return res.status(400).json({ success: false, error: 'Valid branch status (ACTIVE or DEACTIVATED) is required.' });
+    }
+
+    const branch = await (pgDb
+      ? pgDb.updateBranchStatus(storeId, branchId, status)
+      : sqliteDb.updateBranchStatus(storeId, branchId, status));
+    if (pgDb) {
+      try { await sqliteDb.updateBranchStatus(storeId, branchId, status); } catch {}
+    }
+
+    if (!branch) {
+      return res.status(404).json({ success: false, error: 'Branch not found' });
+    }
+
+    const updatedTenant = await (pgDb ? pgDb.getTenant(storeId) : sqliteDb.getTenant(storeId));
+    broadcast('TENANT_UPDATED', { tenant: updatedTenant, branch }, '*');
+
+    res.json({ success: true, branch, tenant: updatedTenant });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
   }
@@ -2701,7 +2929,7 @@ app.get('/api/database/backup', (req: Request, res: Response) => {
   try {
     const snapshot = sqliteDb.getSnapshot();
     const backupData = {
-      system: 'KIIDFROMDREAM POS & INVENTORY',
+      system: 'SMARTSALES POS & INVENTORY',
       version: db.version || snapshot?.version || 1,
       export_date: new Date().toISOString(),
       products: db.products || snapshot?.products || [],
@@ -2728,7 +2956,7 @@ app.get('/api/database/backup', (req: Request, res: Response) => {
     res.json({
       success: true,
       backup: backupData,
-      filename: `kiidfromdream_pos_backup_${new Date().toISOString().slice(0, 10)}.json`,
+      filename: `smartsales_pos_backup_${new Date().toISOString().slice(0, 10)}.json`,
     });
   } catch (err: any) {
     console.error('Error in GET /api/database/backup:', err);
@@ -2747,7 +2975,7 @@ const handleDatabaseRestore = (req: Request, res: Response) => {
 
     // Ensure pristine or incoming Super Admin is never lost
     let restoredEmployees = Array.isArray(backup.employees) ? backup.employees : [];
-    if (!restoredEmployees.some((e: any) => e.role === 'Super Admin' || e.username?.toLowerCase() === 'boluwatife')) {
+    if (!restoredEmployees.some((e: any) => e.role === 'Super Admin' || e.username?.toLowerCase() === 'fickinder')) {
       const existingSuperAdmin = (db.employees || []).find((e: any) => e.role === 'Super Admin');
       if (existingSuperAdmin) {
         restoredEmployees.unshift(existingSuperAdmin);

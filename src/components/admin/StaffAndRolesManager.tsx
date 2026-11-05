@@ -299,8 +299,8 @@ export const StaffAndRolesManager: React.FC<StaffAndRolesManagerProps> = ({ isMo
 
   // Toggle Staff Status (Active <-> Inactive)
   const handleToggleStatus = async (emp: Employee) => {
-    if (emp.role === 'Super Admin' || emp.username?.toLowerCase() === 'boluwatife') {
-      alert('Security Protection: The Super Admin account (Boluwatife) cannot be suspended.');
+    if (emp.role === 'Super Admin' || emp.username?.toLowerCase() === 'fickinder') {
+      alert('Security Protection: The Super Admin account (fickinder) cannot be suspended.');
       return;
     }
 
@@ -328,8 +328,8 @@ export const StaffAndRolesManager: React.FC<StaffAndRolesManagerProps> = ({ isMo
 
   // Delete staff member safely
   const handleDeleteStaff = async (emp: Employee) => {
-    if (emp.role === 'Super Admin' || emp.username?.toLowerCase() === 'boluwatife') {
-      alert('Security Protection: The Super Admin account (Boluwatife) cannot be deleted.');
+    if (emp.role === 'Super Admin' || emp.username?.toLowerCase() === 'fickinder') {
+      alert('Security Protection: The Super Admin account (fickinder) cannot be deleted.');
       return;
     }
 

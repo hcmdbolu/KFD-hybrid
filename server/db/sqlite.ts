@@ -13,12 +13,12 @@ export interface DatabaseMetadata {
 
 export const DEFAULT_RECEIPT_CONFIG = {
   id: 'DEFAULT_RECEIPT_CONFIG',
-  business_name: 'KIID FROM DREAM LTD',
+  business_name: 'SMARTSALES RETAIL LTD',
   tagline: 'Retail & Inventory Management System',
   address_line1: 'Commercial Avenue, Phase 1',
   address_line2: 'Lagos, Nigeria',
   phone_numbers: '+234 800 000 0000',
-  email: 'contact@kiidfromdream.com',
+  email: 'support@smartsales.app',
   tax_or_cac_number: 'RC: 1984201 | TIN: 248109-0001',
   footer_thank_you: 'Thank you for shopping with us!',
   footer_policy_notice: 'Goods received in good condition. Inspect items before checkout. Return policy: 7 days with valid receipt.',
@@ -136,7 +136,7 @@ export class PosDatabase {
   constructor(dataDir?: string) {
     const defaultDataDir = process.env.POS_DATA_DIR || (
       process.env.APPDATA
-        ? path.resolve(process.env.APPDATA, 'kiidfromdream-pos', 'data')
+        ? path.resolve(process.env.APPDATA, 'smartsales-pos', 'data')
         : path.resolve(process.cwd(), 'data')
     );
     const resolvedDataDir = dataDir || defaultDataDir;
@@ -272,6 +272,11 @@ export class PosDatabase {
         } catch { }
       }
 
+      this.safeAddColumn('tenants', 'can_create_branches', 'INTEGER DEFAULT 0');
+      this.safeAddColumn('employees', 'branch_id', "TEXT DEFAULT 'branch_main'");
+      this.safeAddColumn('sales', 'branch_id', "TEXT DEFAULT 'branch_main'");
+      this.safeAddColumn('products', 'branch_id', "TEXT DEFAULT 'branch_main'");
+      this.safeAddColumn('pos_terminals', 'branch_id', "TEXT DEFAULT 'branch_main'");
       this.ensureDefaultTenant();
       this.backfillStoreId(operationalTables);
 
@@ -291,7 +296,7 @@ export class PosDatabase {
           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         `).run(
           'store_default',
-          'KIID FROM DREAM LTD',
+          'SMARTSALES RETAIL LTD',
           'COLD_ROOM',
           'NGN',
           'ACTIVE',
@@ -300,6 +305,26 @@ export class PosDatabase {
           new Date().toISOString()
         );
         console.log('[SQLITE] Default tenant (store_default) initialized successfully.');
+      }
+      const mainBr = this.db.prepare("SELECT branch_id FROM branches WHERE store_id = 'store_default' AND branch_id = 'branch_main'").get();
+      if (!mainBr) {
+        const now = new Date().toISOString();
+        const brObj = {
+          branch_id: 'branch_main',
+          store_id: 'store_default',
+          name: 'Main Branch (HQ)',
+          address: 'Commercial Avenue, Phase 1, Lagos',
+          phone: '+234 800 000 0000',
+          manager_name: 'Store Manager',
+          is_main_branch: true,
+          status: 'ACTIVE',
+          created_at: now,
+          updated_at: now,
+        };
+        this.db.prepare(`
+          INSERT OR IGNORE INTO branches (branch_id, store_id, name, address, phone, manager_name, is_main_branch, status, data, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, 1, 'ACTIVE', ?, ?, ?)
+        `).run('branch_main', 'store_default', brObj.name, brObj.address, brObj.phone, brObj.manager_name, JSON.stringify(brObj), now, now);
       }
     } catch (err: any) {
       console.warn('[SQLITE] Failed to ensure default tenant:', err.message);
@@ -581,10 +606,26 @@ export class PosDatabase {
         email TEXT,
         address TEXT,
         status TEXT NOT NULL DEFAULT 'ACTIVE',
+        can_create_branches INTEGER NOT NULL DEFAULT 0,
         settings TEXT NOT NULL,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
+
+      CREATE TABLE IF NOT EXISTS branches (
+        branch_id TEXT PRIMARY KEY,
+        store_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        address TEXT,
+        phone TEXT,
+        manager_name TEXT,
+        is_main_branch INTEGER NOT NULL DEFAULT 0,
+        status TEXT NOT NULL DEFAULT 'ACTIVE',
+        data TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_branches_store ON branches(store_id, status);
 
       CREATE TABLE IF NOT EXISTS sync_outbox (
         event_id TEXT PRIMARY KEY,
@@ -690,14 +731,16 @@ export class PosDatabase {
   }
 
   /**
-   * Ensures the root Super Admin account (Boluwatife) is securely present
+   * Ensures the root Super Admin account (fickinder) is securely present
    */
   private ensureSuperAdmin() {
     try {
       const superAdmin = {
         staff_id: 'STAFF-SUPER-001',
-        staff_name: 'Boluwatife (Super Admin)',
-        username: 'Boluwatife',
+        store_id: 'store_default',
+        branch_id: 'branch_main',
+        staff_name: 'fickinder (Super Admin)',
+        username: 'fickinder',
         password: 'aabfb72998e702ac:1704901aa0047e7ff4d59da5fe8102a113ffa9108698d134dc6e8b7349a262ec',
         phone_number: '+234 800 000 0001',
         role: 'Super Admin',
@@ -707,27 +750,28 @@ export class PosDatabase {
         status: 'Active',
       };
 
-      const exists = this.db.prepare("SELECT staff_id FROM employees WHERE LOWER(username) = 'boluwatife'").get();
-      if (!exists) {
-        this.db.prepare(`
-          INSERT INTO employees (staff_id, staff_name, username, role, pin, status, data)
-          VALUES (?, ?, ?, ?, ?, ?, ?)
-        `).run(
-          superAdmin.staff_id,
-          superAdmin.staff_name,
-          superAdmin.username,
-          superAdmin.role,
-          superAdmin.pin,
-          superAdmin.status,
-          JSON.stringify(superAdmin)
-        );
-        console.log('[SQLITE] Super Admin Boluwatife auto-seeded successfully.');
-      } else {
-        // Super Admin account already exists; preserve user-configured passwords/PINs
-        console.log('[SQLITE] Super Admin Boluwatife already present; preserving existing credentials.');
-      }
-    } catch {
-      // Table will be seeded by autoMigrateFromJson if fresh
+      this.db.prepare(`
+        INSERT INTO employees (staff_id, staff_name, username, role, pin, status, data)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(staff_id) DO UPDATE SET
+          staff_name = excluded.staff_name,
+          username = excluded.username,
+          role = excluded.role,
+          pin = excluded.pin,
+          status = excluded.status,
+          data = excluded.data
+      `).run(
+        superAdmin.staff_id,
+        superAdmin.staff_name,
+        superAdmin.username,
+        superAdmin.role,
+        superAdmin.pin,
+        superAdmin.status,
+        JSON.stringify(superAdmin)
+      );
+      console.log('[SQLITE] Master Super Admin (fickinder) verified and active.');
+    } catch (err: any) {
+      console.warn('[SQLITE] ensureSuperAdmin warning:', err.message);
     }
   }
 
@@ -821,20 +865,20 @@ export class PosDatabase {
    * sales, refunds, products, customers, suppliers, purchase_orders,
    * audit_logs, cycle_counts, stock_transfers, parked_orders, voided_orders, cash_transfers.
    * Resets receipt branding to clean default (logo_base64: null).
-   * Deletes all employees except Super Admin (Boluwatife).
+   * Deletes all employees except Super Admin (fickinder).
    * Bumps version, logs reset event, and marks seeded.
    */
   public factoryReset(): { version: number; lastUpdated: string } {
     const defaultReceiptConfig = {
       ...DEFAULT_RECEIPT_CONFIG,
       updated_at: new Date().toISOString(),
-      updated_by_staff_name: 'Boluwatife (Super Admin)',
+      updated_by_staff_name: 'fickinder (Super Admin)',
     };
 
     const superAdmin = {
       staff_id: 'STAFF-SUPER-001',
-      staff_name: 'Boluwatife (Super Admin)',
-      username: 'Boluwatife',
+      staff_name: 'fickinder (Super Admin)',
+      username: 'fickinder',
       password: 'aabfb72998e702ac:1704901aa0047e7ff4d59da5fe8102a113ffa9108698d134dc6e8b7349a262ec',
       phone_number: '+234 800 000 0001',
       role: 'Super Admin',
@@ -933,11 +977,11 @@ export class PosDatabase {
         );
       }
 
-      // 3. Purge all employees EXCEPT Super Admin Boluwatife
-      this.db.exec(`DELETE FROM employees WHERE LOWER(username) != 'boluwatife';`);
+      // 3. Purge all employees EXCEPT Super Admin fickinder
+      this.db.exec(`DELETE FROM employees WHERE LOWER(username) != 'fickinder';`);
 
-      // 4. Ensure Boluwatife is present with clean standard credentials
-      const exists = this.db.prepare("SELECT staff_id FROM employees WHERE LOWER(username) = 'boluwatife'").get();
+      // 4. Ensure fickinder is present with clean standard credentials
+      const exists = this.db.prepare("SELECT staff_id FROM employees WHERE LOWER(username) = 'fickinder'").get();
       if (!exists) {
         this.db.prepare(`
           INSERT INTO employees (staff_id, staff_name, username, role, pin, status, data)
@@ -955,7 +999,7 @@ export class PosDatabase {
         this.db.prepare(`
           UPDATE employees 
           SET staff_name = ?, pin = ?, status = 'Active', data = ?
-          WHERE LOWER(username) = 'boluwatife'
+          WHERE LOWER(username) = 'fickinder'
         `).run(superAdmin.staff_name, superAdmin.pin, JSON.stringify(superAdmin));
       }
 
@@ -2632,11 +2676,12 @@ export class PosDatabase {
   }
 
   /**
-   * Multi-Tenant SaaS: Retrieve Tenant Configuration
+   * Multi-Tenant SaaS: Retrieve Tenant Configuration with Branches
    */
   public getTenant(storeId: string): any | null {
     const row = this.db.prepare('SELECT * FROM tenants WHERE store_id = ?').get(storeId) as any | undefined;
     if (!row) return null;
+    const branches = this.listBranches(storeId);
     return {
       store_id: row.store_id,
       business_name: row.business_name,
@@ -2646,6 +2691,8 @@ export class PosDatabase {
       email: row.email,
       address: row.address,
       status: row.status,
+      can_create_branches: Boolean(row.can_create_branches),
+      branches,
       created_at: row.created_at,
       updated_at: row.updated_at,
       settings: row.settings ? JSON.parse(row.settings) : {},
@@ -2653,7 +2700,7 @@ export class PosDatabase {
   }
 
   /**
-   * Multi-Tenant SaaS: List All Registered Tenants
+   * Multi-Tenant SaaS: List All Registered Tenants with Nested Branches
    */
   public listTenants(): any[] {
     const rows = this.db.prepare('SELECT * FROM tenants ORDER BY created_at DESC').all() as any[];
@@ -2666,10 +2713,132 @@ export class PosDatabase {
       email: r.email,
       address: r.address,
       status: r.status,
+      can_create_branches: Boolean(r.can_create_branches),
+      branches: this.listBranches(r.store_id),
       created_at: r.created_at,
       updated_at: r.updated_at,
       settings: r.settings ? JSON.parse(r.settings) : {},
     }));
+  }
+
+  public updateTenantStatus(storeId: string, status: 'ACTIVE' | 'DEACTIVATED'): any {
+    const now = new Date().toISOString();
+    this.db.prepare('UPDATE tenants SET status = ?, updated_at = ? WHERE store_id = ?').run(status, now, storeId);
+    this.touchVersion();
+    return this.getTenant(storeId);
+  }
+
+  public updateTenantPermissions(storeId: string, canCreateBranches: boolean): any {
+    const now = new Date().toISOString();
+    this.db.prepare('UPDATE tenants SET can_create_branches = ?, updated_at = ? WHERE store_id = ?').run(canCreateBranches ? 1 : 0, now, storeId);
+    this.touchVersion();
+    return this.getTenant(storeId);
+  }
+
+  public listBranches(storeId?: string): any[] {
+    try {
+      const rows = (storeId && storeId !== '*' && storeId !== 'system_superadmin'
+        ? this.db.prepare('SELECT * FROM branches WHERE store_id = ? ORDER BY is_main_branch DESC, created_at ASC').all(storeId)
+        : this.db.prepare('SELECT * FROM branches ORDER BY is_main_branch DESC, created_at ASC').all()
+      ) as any[];
+      if (rows.length === 0 && storeId && storeId !== '*' && storeId !== 'system_superadmin') {
+        const now = new Date().toISOString();
+        const defaultBranch = {
+          branch_id: 'branch_main',
+          store_id: storeId,
+          name: 'Main Branch (HQ)',
+          address: '',
+          phone: '',
+          manager_name: 'Store Manager',
+          is_main_branch: true,
+          status: 'ACTIVE',
+          created_at: now,
+          updated_at: now,
+        };
+        try {
+          this.db.prepare(`
+            INSERT OR IGNORE INTO branches (branch_id, store_id, name, address, phone, manager_name, is_main_branch, status, data, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, 1, 'ACTIVE', ?, ?, ?)
+          `).run(`branch_main_${storeId}`, storeId, defaultBranch.name, defaultBranch.address, defaultBranch.phone, defaultBranch.manager_name, JSON.stringify(defaultBranch), now, now);
+        } catch {}
+        return [defaultBranch];
+      }
+      return rows.map(r => {
+        let parsed: any = {};
+        try { parsed = JSON.parse(r.data); } catch {}
+        return {
+          ...parsed,
+          branch_id: parsed.branch_id || r.branch_id,
+          store_id: r.store_id,
+          name: r.name,
+          address: r.address || '',
+          phone: r.phone || '',
+          manager_name: r.manager_name || '',
+          is_main_branch: Boolean(r.is_main_branch),
+          status: r.status || 'ACTIVE',
+          created_at: r.created_at,
+          updated_at: r.updated_at,
+        };
+      });
+    } catch {
+      return [];
+    }
+  }
+
+  public createBranch(params: {
+    store_id: string;
+    name: string;
+    address?: string;
+    phone?: string;
+    manager_name?: string;
+    is_main_branch?: boolean;
+  }): any {
+    const storeId = params.store_id || 'store_default';
+    const branchId = `br_${Date.now().toString(36)}_${Math.random().toString(36).substring(2, 5)}`;
+    const now = new Date().toISOString();
+    const branchObj = {
+      branch_id: branchId,
+      store_id: storeId,
+      name: params.name.trim(),
+      address: params.address || '',
+      phone: params.phone || '',
+      manager_name: params.manager_name || '',
+      is_main_branch: Boolean(params.is_main_branch),
+      status: 'ACTIVE',
+      created_at: now,
+      updated_at: now,
+    };
+    this.db.prepare(`
+      INSERT INTO branches (branch_id, store_id, name, address, phone, manager_name, is_main_branch, status, data, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 'ACTIVE', ?, ?, ?)
+    `).run(
+      branchId,
+      storeId,
+      branchObj.name,
+      branchObj.address,
+      branchObj.phone,
+      branchObj.manager_name,
+      branchObj.is_main_branch ? 1 : 0,
+      JSON.stringify(branchObj),
+      now,
+      now
+    );
+    this.touchVersion();
+    return branchObj;
+  }
+
+  public updateBranchStatus(storeId: string, branchId: string, status: 'ACTIVE' | 'DEACTIVATED'): any {
+    const now = new Date().toISOString();
+    this.db.prepare('UPDATE branches SET status = ?, updated_at = ? WHERE store_id = ? AND (branch_id = ? OR branch_id = ?)').run(
+      status,
+      now,
+      storeId,
+      branchId,
+      `${branchId}_${storeId}`
+    );
+    this.touchVersion();
+    const branches = this.listBranches(storeId);
+    return branches.find(b => b.branch_id === branchId) || null;
   }
 
   /**
@@ -2693,11 +2862,12 @@ export class PosDatabase {
     const currency = params.currency || 'NGN';
 
     const tenantRegistrationTx = this.transaction(() => {
+      const canCreateBranches = Boolean((params as any).can_create_branches);
       // 1. Insert into tenants table
       this.db.prepare(`
         INSERT INTO tenants (
-          store_id, business_name, vertical, currency, phone, email, address, status, settings, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, 'ACTIVE', ?, ?, ?)
+          store_id, business_name, vertical, currency, phone, email, address, status, can_create_branches, settings, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, 'ACTIVE', ?, ?, ?, ?)
       `).run(
         storeId,
         params.business_name,
@@ -2706,10 +2876,29 @@ export class PosDatabase {
         params.phone || '',
         params.email || '',
         params.address || '',
+        canCreateBranches ? 1 : 0,
         JSON.stringify({ vertical, currency }),
         now,
         now
       );
+
+      // 1b. Seed Default Main Branch (HQ)
+      const mainBrObj = {
+        branch_id: 'branch_main',
+        store_id: storeId,
+        name: 'Main Branch (HQ)',
+        address: params.address || 'Main Store Location',
+        phone: params.phone || '',
+        manager_name: params.admin_name || 'Store Admin',
+        is_main_branch: true,
+        status: 'ACTIVE',
+        created_at: now,
+        updated_at: now,
+      };
+      this.db.prepare(`
+        INSERT OR IGNORE INTO branches (branch_id, store_id, name, address, phone, manager_name, is_main_branch, status, data, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, 1, 'ACTIVE', ?, ?, ?)
+      `).run(`branch_main_${storeId}`, storeId, mainBrObj.name, mainBrObj.address, mainBrObj.phone, mainBrObj.manager_name, JSON.stringify(mainBrObj), now, now);
 
       // 2. Create and Seed Initial Admin Staff for the new tenant
       const staffId = `STAFF-${storeId.slice(-4)}-001`;

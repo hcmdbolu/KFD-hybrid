@@ -573,7 +573,7 @@ INSERT INTO tenants (
     NOW()
 ) ON CONFLICT (store_id) DO NOTHING;
 
-DO $
+DO $$
 BEGIN
     PERFORM set_config('app.current_store_id', 'store_default', true);
 
@@ -614,7 +614,7 @@ BEGIN
         pin = EXCLUDED.pin,
         data = EXCLUDED.data,
         updated_at = NOW();
-END $;
+END $$;
 
 INSERT INTO metadata (key, value, updated_at)
 VALUES (

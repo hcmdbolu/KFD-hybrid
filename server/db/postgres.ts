@@ -25,9 +25,9 @@ export class PosPostgresDatabase implements IPosDatabase {
       ssl: (process.env.PGSSLMODE === 'disable' || process.env.DATABASE_SSL === 'false' || (!process.env.DATABASE_URL && (!connStr || connStr.includes('localhost') || connStr.includes('127.0.0.1'))))
         ? false
         : { rejectUnauthorized: false },
-      max: Number(process.env.PG_POOL_MAX || 20),
+      max: Number(process.env.PG_POOL_MAX || 10),
       idleTimeoutMillis: 30000,
-      connectionTimeoutMillis: 5000,
+      connectionTimeoutMillis: 10000,
     });
 
     this.pool.on('error', (err: any) => {
@@ -148,41 +148,48 @@ export class PosPostgresDatabase implements IPosDatabase {
     }
   }
 
-  public async getTable(table: string, storeId: string = 'store_default'): Promise<any[]> {
-    return this.withTenant(storeId, async (client) => {
-      const safeTable = table.replace(/[^a-z0-9_]/gi, '');
-      try {
-        const res = await client.query(
-          `SELECT data FROM ${safeTable} WHERE store_id = $1 ORDER BY COALESCE(updated_at, created_at) DESC`,
-          [storeId]
-        );
-        return res.rows.map((r: any) => (typeof r.data === 'string' ? JSON.parse(r.data) : r.data));
-      } catch (err: any) {
-        if (err.code === '42703') { // 42703: undefined_column error fallback
+  /**
+   * Helper to fetch all rows for a table using an existing leased client
+   */
+  private async getTableWithClient(client: pg.PoolClient, table: string, storeId: string): Promise<any[]> {
+    const safeTable = table.replace(/[^a-z0-9_]/gi, '');
+    try {
+      const res = await client.query(
+        `SELECT data FROM ${safeTable} WHERE store_id = $1 ORDER BY COALESCE(updated_at, created_at) DESC`,
+        [storeId]
+      );
+      return res.rows.map((r: any) => (typeof r.data === 'string' ? JSON.parse(r.data) : r.data));
+    } catch (err: any) {
+      if (err.code === '42703') { // 42703: undefined_column error fallback
+        try {
+          const fallbackRes = await client.query(
+            `SELECT data FROM ${safeTable} WHERE store_id = $1 ORDER BY updated_at DESC`,
+            [storeId]
+          );
+          return fallbackRes.rows.map((r: any) => (typeof r.data === 'string' ? JSON.parse(r.data) : r.data));
+        } catch {
           try {
-            const fallbackRes = await client.query(
-              `SELECT data FROM ${safeTable} WHERE store_id = $1 ORDER BY updated_at DESC`,
+            const createdRes = await client.query(
+              `SELECT data FROM ${safeTable} WHERE store_id = $1 ORDER BY created_at DESC`,
               [storeId]
             );
-            return fallbackRes.rows.map((r: any) => (typeof r.data === 'string' ? JSON.parse(r.data) : r.data));
+            return createdRes.rows.map((r: any) => (typeof r.data === 'string' ? JSON.parse(r.data) : r.data));
           } catch {
-            try {
-              const createdRes = await client.query(
-                `SELECT data FROM ${safeTable} WHERE store_id = $1 ORDER BY created_at DESC`,
-                [storeId]
-              );
-              return createdRes.rows.map((r: any) => (typeof r.data === 'string' ? JSON.parse(r.data) : r.data));
-            } catch {
-              const rawRes = await client.query(
-                `SELECT data FROM ${safeTable} WHERE store_id = $1`,
-                [storeId]
-              );
-              return rawRes.rows.map((r: any) => (typeof r.data === 'string' ? JSON.parse(r.data) : r.data));
-            }
+            const rawRes = await client.query(
+              `SELECT data FROM ${safeTable} WHERE store_id = $1`,
+              [storeId]
+            );
+            return rawRes.rows.map((r: any) => (typeof r.data === 'string' ? JSON.parse(r.data) : r.data));
           }
         }
-        throw err;
       }
+      throw err;
+    }
+  }
+
+  public async getTable(table: string, storeId: string = 'store_default'): Promise<any[]> {
+    return this.withTenant(storeId, async (client) => {
+      return this.getTableWithClient(client, table, storeId);
     });
   }
 
@@ -1096,28 +1103,34 @@ export class PosPostgresDatabase implements IPosDatabase {
       };
     }
 
-    const [products, customers, categories, discountRules, receiptSettings, employees] = await Promise.all([
-      this.getTable('products', storeId),
-      this.getTable('customers', storeId),
-      this.getCategories(storeId),
-      this.getDiscountRules(storeId),
-      this.getReceiptSettings(storeId),
-      this.getTable('employees', storeId),
-    ]);
+    return await this.withTenant(storeId, async (client) => {
+      const products = await this.getTableWithClient(client, 'products', storeId);
+      const customers = await this.getTableWithClient(client, 'customers', storeId);
+      const categories = await this.getTableWithClient(client, 'categories', storeId);
+      const discountRules = await this.getTableWithClient(client, 'discount_rules', storeId);
+      const employees = await this.getTableWithClient(client, 'employees', storeId);
 
-    return {
-      success: true,
-      up_to_date: false,
-      current_version: currentVersion,
-      deltas: {
-        products,
-        customers,
-        categories,
-        discountRules,
-        receiptSettings,
-        employees,
-      },
-    };
+      let receiptSettings = DEFAULT_RECEIPT_CONFIG;
+      const resReceipt = await client.query('SELECT data FROM receipt_settings WHERE store_id = $1 LIMIT 1', [storeId]);
+      if (resReceipt.rows.length > 0) {
+        const d = resReceipt.rows[0].data;
+        receiptSettings = typeof d === 'string' ? JSON.parse(d) : d;
+      }
+
+      return {
+        success: true,
+        up_to_date: false,
+        current_version: currentVersion,
+        deltas: {
+          products,
+          customers,
+          categories,
+          discountRules,
+          receiptSettings,
+          employees,
+        },
+      };
+    });
   }
 
   public async recordTerminalHeartbeat(params: {
@@ -1255,70 +1268,64 @@ export class PosPostgresDatabase implements IPosDatabase {
 
   public async getSnapshot(storeId: string = 'store_default'): Promise<any> {
     const meta = await this.getMetadata();
-    const [
-      products,
-      customers,
-      suppliers,
-      employees,
-      sales,
-      refunds,
-      auditLogs,
-      cycleCounts,
-      stockTransfers,
-      parkedOrders,
-      voidedOrders,
-      posTerminals,
-      cashTransfers,
-      customerDebtRepayments,
-      receiptSettings,
-      discountSecurityConfig,
-      categories,
-      discountRules,
-    ] = await Promise.all([
-      this.getTable('products', storeId),
-      this.getTable('customers', storeId),
-      this.getTable('suppliers', storeId),
-      this.getTable('employees', storeId),
-      this.getTable('sales', storeId),
-      this.getTable('refunds', storeId),
-      this.getTable('audit_logs', storeId),
-      this.getTable('cycle_counts', storeId),
-      this.getTable('stock_transfers', storeId),
-      this.getTable('parked_orders', storeId),
-      this.getTable('voided_orders', storeId),
-      this.getTable('pos_terminals', storeId),
-      this.getTable('cash_transfers', storeId),
-      this.getCustomerDebtRepayments(storeId),
-      this.getReceiptSettings(storeId),
-      this.getDiscountSecurityConfig(storeId),
-      this.getCategories(storeId),
-      this.getDiscountRules(storeId),
-    ]);
 
-    return {
-      version: meta.version,
-      lastUpdated: meta.lastUpdated,
-      store_id: storeId,
-      products,
-      customers,
-      suppliers,
-      employees,
-      purchaseOrders: [],
-      sales,
-      refunds,
-      auditLogs,
-      cycleCounts,
-      stockTransfers,
-      parkedOrders,
-      voidedOrders,
-      posTerminals,
-      cashTransfers,
-      customerDebtRepayments,
-      receiptSettings,
-      discountSecurityConfig,
-      categories,
-      discountRules,
-    };
+    return await this.withTenant(storeId, async (client) => {
+      const products = await this.getTableWithClient(client, 'products', storeId);
+      const customers = await this.getTableWithClient(client, 'customers', storeId);
+      const suppliers = await this.getTableWithClient(client, 'suppliers', storeId);
+      const employees = await this.getTableWithClient(client, 'employees', storeId);
+      const sales = await this.getTableWithClient(client, 'sales', storeId);
+      const refunds = await this.getTableWithClient(client, 'refunds', storeId);
+      const auditLogs = await this.getTableWithClient(client, 'audit_logs', storeId);
+      const cycleCounts = await this.getTableWithClient(client, 'cycle_counts', storeId);
+      const stockTransfers = await this.getTableWithClient(client, 'stock_transfers', storeId);
+      const parkedOrders = await this.getTableWithClient(client, 'parked_orders', storeId);
+      const voidedOrders = await this.getTableWithClient(client, 'voided_orders', storeId);
+      const posTerminals = await this.getTableWithClient(client, 'pos_terminals', storeId);
+      const cashTransfers = await this.getTableWithClient(client, 'cash_transfers', storeId);
+      const customerDebtRepayments = await this.getTableWithClient(client, 'customer_debt_repayments', storeId);
+      const categories = await this.getTableWithClient(client, 'categories', storeId);
+      const discountRules = await this.getTableWithClient(client, 'discount_rules', storeId);
+
+      let receiptSettings = DEFAULT_RECEIPT_CONFIG;
+      const resReceipt = await client.query('SELECT data FROM receipt_settings WHERE store_id = $1 LIMIT 1', [storeId]);
+      if (resReceipt.rows.length > 0) {
+        const d = resReceipt.rows[0].data;
+        receiptSettings = typeof d === 'string' ? JSON.parse(d) : d;
+      }
+
+      let discountSecurityConfig = DEFAULT_DISCOUNT_SECURITY_CONFIG;
+      const resDiscount = await client.query('SELECT data FROM discount_settings WHERE store_id = $1 LIMIT 1', [storeId]);
+      if (resDiscount.rows.length > 0) {
+        const d = resDiscount.rows[0].data;
+        discountSecurityConfig = typeof d === 'string' ? JSON.parse(d) : d;
+      }
+
+      return {
+        version: meta.version,
+        lastUpdated: meta.lastUpdated,
+        store_id: storeId,
+        products,
+        customers,
+        suppliers,
+        employees,
+        purchaseOrders: [],
+        sales,
+        refunds,
+        auditLogs,
+        cycleCounts,
+        stockTransfers,
+        parkedOrders,
+        voidedOrders,
+        posTerminals,
+        cashTransfers,
+        customerDebtRepayments,
+        receiptSettings,
+        discountSecurityConfig,
+        categories,
+        discountRules,
+      };
+    });
   }
 
   public async close(): Promise<void> {

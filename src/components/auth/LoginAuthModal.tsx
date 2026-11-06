@@ -48,7 +48,14 @@ export const LoginAuthModal: React.FC<LoginAuthModalProps> = ({
 
   useEffect(() => {
     if (!isOpen) return;
-    fetch(getApiUrl('/api/v1/tenants'))
+    const token = localStorage.getItem('smartsales_auth_token_v2') || '';
+    fetch(getApiUrl('/api/v1/tenants'), {
+      headers: {
+        'Authorization': token ? `Bearer ${token}` : '',
+        'x-session-token': token,
+        'x-store-id': currentStoreId,
+      }
+    })
       .then(r => (r.ok ? r.json() : null))
       .then(data => {
         if (data && Array.isArray(data.tenants)) {
@@ -56,7 +63,7 @@ export const LoginAuthModal: React.FC<LoginAuthModalProps> = ({
         }
       })
       .catch(() => {});
-  }, [isOpen]);
+  }, [isOpen, currentStoreId]);
 
   const selectedTenant = tenantsList.find(t => t.store_id === currentStoreId);
   const availableBranches = selectedTenant?.branches || [];
@@ -491,57 +498,23 @@ export const LoginAuthModal: React.FC<LoginAuthModalProps> = ({
               </div>
             </div>
 
-            {/* Store & Branch Target Selector (Multi-Tenant Store Login) */}
-            {tenantsList.length > 0 && (
-              <div className="mt-4 p-3 rounded-2xl bg-slate-800/50 border border-slate-700/60 text-left space-y-2.5">
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                  <div>
-                    <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1">
-                      Select Store / Business
-                    </label>
-                    <select
-                      value={currentStoreId}
-                      onChange={e => {
-                        const nextStore = e.target.value;
-                        setCurrentStoreId(nextStore);
-                        const t = tenantsList.find(item => item.store_id === nextStore);
-                        if (t?.branches?.[0]?.branch_id) {
-                          setCurrentBranchId(t.branches[0].branch_id);
-                        } else {
-                          setCurrentBranchId('branch_main');
-                        }
-                      }}
-                      className="w-full px-2.5 py-2 bg-slate-900 border border-slate-700 rounded-xl text-xs text-white font-semibold focus:outline-none focus:border-emerald-500"
-                    >
-                      {tenantsList.map(t => (
-                        <option key={t.store_id} value={t.store_id}>
-                          {t.business_name} {t.status === 'DEACTIVATED' ? '(Deactivated)' : ''}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div>
-                    <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1">
-                      Select Store Branch
-                    </label>
-                    <select
-                      value={currentBranchId}
-                      onChange={e => setCurrentBranchId(e.target.value)}
-                      className="w-full px-2.5 py-2 bg-slate-900 border border-slate-700 rounded-xl text-xs text-white font-semibold focus:outline-none focus:border-emerald-500"
-                    >
-                      {availableBranches.length > 0 ? (
-                        availableBranches.map(b => (
-                          <option key={b.branch_id} value={b.branch_id}>
-                            {b.name} {b.status === 'DEACTIVATED' ? '(Deactivated)' : ''}
-                          </option>
-                        ))
-                      ) : (
-                        <option value="branch_main">Main Branch (HQ)</option>
-                      )}
-                    </select>
-                  </div>
-                </div>
+            {/* Branch Target Selector (Multi-Branch Store) */}
+            {availableBranches.length > 1 && (
+              <div className="mt-3.5 p-3 rounded-2xl bg-slate-800/50 border border-slate-700/60 text-left">
+                <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1">
+                  Assigned Branch
+                </label>
+                <select
+                  value={currentBranchId}
+                  onChange={e => setCurrentBranchId(e.target.value)}
+                  className="w-full px-2.5 py-2 bg-slate-900 border border-slate-700 rounded-xl text-xs text-white font-semibold focus:outline-none focus:border-emerald-500"
+                >
+                  {availableBranches.map(b => (
+                    <option key={b.branch_id} value={b.branch_id}>
+                      {b.name} {b.status === 'DEACTIVATED' ? '(Deactivated)' : ''}
+                    </option>
+                  ))}
+                </select>
               </div>
             )}
 

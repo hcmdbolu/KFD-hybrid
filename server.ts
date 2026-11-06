@@ -4,7 +4,7 @@ import cors from 'cors';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
-import { PosDatabase } from './server/db/sqlite.ts';
+import { PosDatabase, DEFAULT_MANAGEMENT_DISCOUNT_RULES } from './server/db/sqlite.ts';
 import { PosPostgresDatabase } from './server/db/postgres.ts';
 import { isS3Configured, uploadToCloudStorage } from './server/utils/s3Storage.ts';
 import { verifyPin, hashPin, isHashedPin, createSessionToken, verifySessionToken } from './src/utils/security.ts';
@@ -208,6 +208,14 @@ function extractTenantContext(req: Request) {
   (req as any).branchId = headerBranchId || 'branch_main';
 }
 
+function getRequestStoreId(req: Request, fallbackPayload?: any): string {
+  return (req as any).storeId || fallbackPayload?.store_id || 'store_default';
+}
+
+function getRequestBranchId(req: Request, fallbackPayload?: any): string {
+  return (req as any).branchId || fallbackPayload?.branch_id || 'branch_main';
+}
+
 app.use((req: Request, _res: Response, next: any) => {
   extractTenantContext(req);
   next();
@@ -404,14 +412,6 @@ app.post('/api/auth/login', async (req: Request, res: Response) => {
         e => (e.status !== 'Inactive') &&
           (verifyPin(cleanPin, e.pin) || (e.password && verifyPin(cleanPin, e.password)))
       );
-      if (!staff) {
-        // Fallback across all employees
-        const allEmployees = sqliteDb.getTable('employees');
-        staff = allEmployees.find(
-          e => (e.status !== 'Inactive') &&
-            (verifyPin(cleanPin, e.pin) || (e.password && verifyPin(cleanPin, e.password)))
-        );
-      }
     }
 
     // 5. Failed attempt handling
@@ -796,9 +796,16 @@ app.post('/api/v1/tenants/register', async (req: Request, res: Response) => {
   }
 });
 
-// List all registered tenant stores (with branches)
-app.get('/api/v1/tenants', async (_req: Request, res: Response) => {
+// List registered tenant stores - Protected: Non-Super Admin only sees their own store
+app.get('/api/v1/tenants', async (req: Request, res: Response) => {
   try {
+    const user = (req as any).user;
+    const isSuperAdmin = user && user.role === 'Super Admin';
+    if (!isSuperAdmin) {
+      const storeId = getRequestStoreId(req);
+      const tenant = await (pgDb ? pgDb.getTenant(storeId) : sqliteDb.getTenant(storeId));
+      return res.json({ success: true, tenants: tenant ? [tenant] : [] });
+    }
     const tenants = await (pgDb ? pgDb.listTenants() : sqliteDb.listTenants());
     res.json({ success: true, tenants });
   } catch (err: any) {
@@ -1035,7 +1042,7 @@ app.get('/api/v1/terminals/fleet', (req: Request, res: Response) => {
 
 
 // 5. Centralized Sale Transaction Creation
-app.post('/api/sales', (req: Request, res: Response) => {
+app.post('/api/sales', async (req: Request, res: Response) => {
   try {
     const { transaction } = req.body;
     if (!transaction || !transaction.transaction_id) {
@@ -1044,7 +1051,7 @@ app.post('/api/sales', (req: Request, res: Response) => {
 
     // Restrict SuperAdmin accounts strictly to administrative & oversight tasks (no retail sales floor checkouts)
     const storeIdForStaff = (req as any).storeId || transaction.store_id || 'store_default';
-    const storeStaffList = sqliteDb.getTable('employees', storeIdForStaff);
+    const storeStaffList = await (pgDb ? pgDb.getTable('employees', storeIdForStaff) : sqliteDb.getTable('employees', storeIdForStaff));
     const cashierStaff = storeStaffList.find((e: any) => e.staff_id === transaction.staff_id || e.staff_id === transaction.cashier_id);
     if (cashierStaff && cashierStaff.role === 'Super Admin') {
       return res.status(403).json({
@@ -1091,9 +1098,13 @@ app.post('/api/sales', (req: Request, res: Response) => {
     transaction.date_time = finalDate;
     transaction.timestamp = finalDate;
 
-    // Direct atomic write to SQLite database with tenant isolation
-    const storeId = (req as any).storeId || transaction.store_id || 'store_default';
+    // Direct atomic write to PostgreSQL and SQLite databases with tenant isolation
+    const storeId = getRequestStoreId(req, transaction);
+    const branchId = getRequestBranchId(req, transaction);
     transaction.store_id = storeId;
+    if (!transaction.branch_id) transaction.branch_id = branchId;
+
+    if (pgDb) await pgDb.addSale(transaction, storeId);
     sqliteDb.recordSale(transaction, storeId);
 
     // 1. Add to sales memory
@@ -1454,39 +1465,44 @@ app.post('/api/refunds', (req: Request, res: Response) => {
 });
 
 // 6b. Park or Update Held Order
-app.post('/api/orders/park', (req: Request, res: Response) => {
+app.post('/api/orders/park', async (req: Request, res: Response) => {
   try {
     const { order, action } = req.body;
     if (!order || (!order.order_id && !order.id)) {
       return res.status(400).json({ success: false, error: 'Order data is required' });
     }
 
-    if (!Array.isArray(db.parkedOrders)) {
-      db.parkedOrders = [];
-    }
-
+    const storeId = getRequestStoreId(req, order);
     const targetId = order.order_id || order.id;
+    order.store_id = storeId;
 
     if (action === 'DELETE' || action === 'RESUME') {
-      db.parkedOrders = db.parkedOrders.filter(o => (o.order_id || o.id) !== targetId);
+      if (pgDb) await pgDb.deleteParkedOrder(targetId, storeId);
       sqliteDb.deleteParkedOrder(targetId);
-    } else {
-      const idx = db.parkedOrders.findIndex(o => (o.order_id || o.id) === targetId);
-      if (idx !== -1) {
-        db.parkedOrders[idx] = { ...db.parkedOrders[idx], ...order, order_id: targetId };
-      } else {
-        db.parkedOrders.unshift({ ...order, order_id: targetId });
+      if (Array.isArray(db.parkedOrders)) {
+        db.parkedOrders = db.parkedOrders.filter(o => (o.order_id || o.id) !== targetId);
       }
+    } else {
+      if (pgDb) await pgDb.addParkedOrder(order, storeId);
       sqliteDb.upsertParkedOrder(order);
+      if (Array.isArray(db.parkedOrders)) {
+        const idx = db.parkedOrders.findIndex(o => (o.order_id || o.id) === targetId);
+        if (idx !== -1) {
+          db.parkedOrders[idx] = { ...db.parkedOrders[idx], ...order, order_id: targetId };
+        } else {
+          db.parkedOrders.unshift({ ...order, order_id: targetId });
+        }
+      }
     }
 
     saveDatabase();
-    broadcast('PARKED_ORDERS_UPDATED', { parkedOrders: db.parkedOrders });
+    const updatedOrders = await (pgDb ? pgDb.getTable('parked_orders', storeId) : sqliteDb.getTable('parked_orders', storeId));
+    broadcast('PARKED_ORDERS_UPDATED', { parkedOrders: updatedOrders, store_id: storeId }, storeId);
 
     res.json({
       success: true,
-      parkedOrders: db.parkedOrders,
-      version: db.version,
+      parkedOrders: updatedOrders,
+      version: db ? db.version : 1,
     });
   } catch (err: any) {
     console.error('Error in /api/orders/park:', err);
@@ -1495,20 +1511,27 @@ app.post('/api/orders/park', (req: Request, res: Response) => {
 });
 
 // 6c. Record Voided / Aborted Order (with Reason and Inventory Integrity Protection)
-app.post('/api/orders/void', requireAuth, (req: Request, res: Response) => {
+app.post('/api/orders/void', requireAuth, async (req: Request, res: Response) => {
   try {
     const { voidRecord } = req.body;
     if (!voidRecord || !voidRecord.void_id) {
       return res.status(400).json({ success: false, error: 'Void record is required' });
     }
 
+    const storeId = getRequestStoreId(req, voidRecord);
+    voidRecord.store_id = storeId;
+
     // Remove from parked if it was parked
     if (voidRecord.order_id) {
-      db.parkedOrders = db.parkedOrders.filter(o => o.order_id !== voidRecord.order_id);
+      if (pgDb) await pgDb.deleteParkedOrder(voidRecord.order_id, storeId);
+      sqliteDb.deleteParkedOrder(voidRecord.order_id);
+      if (Array.isArray(db.parkedOrders)) {
+        db.parkedOrders = db.parkedOrders.filter(o => o.order_id !== voidRecord.order_id);
+      }
     }
 
     // Add to voided orders list
-    db.voidedOrders.unshift(voidRecord);
+    if (pgDb) await pgDb.addVoidedOrder(voidRecord, storeId);
     sqliteDb.addVoidedOrder(voidRecord);
 
     // Audit log
@@ -1595,34 +1618,44 @@ app.post('/api/customers/:id/discount', (req: Request, res: Response) => {
 });
 
 // 8. Add or Update Customer
-app.post('/api/customers', (req: Request, res: Response) => {
+app.post('/api/customers', async (req: Request, res: Response) => {
   try {
     const { customer, action } = req.body;
     if (!customer || !customer.customer_id) {
       return res.status(400).json({ success: false, error: 'Customer data required' });
     }
 
-    const idx = db.customers.findIndex(c => c.customer_id === customer.customer_id);
+    const storeId = getRequestStoreId(req, customer);
+    customer.store_id = storeId;
+
     if (action === 'DELETE') {
-      db.customers = db.customers.filter(c => c.customer_id !== customer.customer_id);
+      if (pgDb) await pgDb.deleteCustomer(customer.customer_id, storeId);
       sqliteDb.deleteCustomer(customer.customer_id);
+      if (Array.isArray(db.customers)) {
+        db.customers = db.customers.filter(c => c.customer_id !== customer.customer_id);
+      }
     } else {
-      sqliteDb.upsertCustomer(customer);
-      if (idx !== -1) {
-        db.customers[idx] = { ...db.customers[idx], ...customer };
-      } else {
-        db.customers.unshift(customer);
+      if (pgDb) await pgDb.upsertCustomer(customer, storeId);
+      sqliteDb.upsertCustomer(customer, storeId);
+      if (Array.isArray(db.customers)) {
+        const idx = db.customers.findIndex(c => c.customer_id === customer.customer_id);
+        if (idx !== -1) {
+          db.customers[idx] = { ...db.customers[idx], ...customer };
+        } else {
+          db.customers.unshift(customer);
+        }
       }
     }
 
     saveDatabase();
-    broadcast('CUSTOMER_UPDATED', { customers: db.customers });
+    const updatedCustomers = await (pgDb ? pgDb.getTable('customers', storeId) : sqliteDb.getTable('customers', storeId));
+    broadcast('CUSTOMER_UPDATED', { customers: updatedCustomers, store_id: storeId }, storeId);
 
     res.json({
       success: true,
-      customer: idx !== -1 ? db.customers[idx] : customer,
-      customers: db.customers,
-      version: db.version,
+      customer,
+      customers: updatedCustomers,
+      version: db ? db.version : 1,
     });
   } catch (err: any) {
     console.error('Error in /api/customers:', err);
@@ -1631,33 +1664,43 @@ app.post('/api/customers', (req: Request, res: Response) => {
 });
 
 // 9. Add or Update Product
-app.post('/api/products', (req: Request, res: Response) => {
+app.post('/api/products', async (req: Request, res: Response) => {
   try {
     const { product, action } = req.body;
     if (!product || !product.item_sn) {
       return res.status(400).json({ success: false, error: 'Product data required' });
     }
 
+    const storeId = getRequestStoreId(req, product);
+    product.store_id = storeId;
+
     if (action === 'DELETE') {
-      db.products = db.products.filter(p => p.item_sn !== product.item_sn);
+      if (pgDb) await pgDb.deleteProduct(product.item_sn, storeId);
       sqliteDb.deleteProduct(product.item_sn);
+      if (Array.isArray(db.products)) {
+        db.products = db.products.filter(p => p.item_sn !== product.item_sn);
+      }
     } else {
-      sqliteDb.upsertProduct(product);
-      const idx = db.products.findIndex(p => p.item_sn === product.item_sn);
-      if (idx !== -1) {
-        db.products[idx] = { ...db.products[idx], ...product };
-      } else {
-        db.products.unshift(product);
+      if (pgDb) await pgDb.upsertProduct(product, storeId);
+      sqliteDb.upsertProduct(product, storeId);
+      if (Array.isArray(db.products)) {
+        const idx = db.products.findIndex(p => p.item_sn === product.item_sn);
+        if (idx !== -1) {
+          db.products[idx] = { ...db.products[idx], ...product };
+        } else {
+          db.products.unshift(product);
+        }
       }
     }
 
     saveDatabase();
-    broadcast('PRODUCTS_UPDATED', { products: db.products });
+    const updatedProducts = await (pgDb ? pgDb.getTable('products', storeId) : sqliteDb.getTable('products', storeId));
+    broadcast('PRODUCTS_UPDATED', { products: updatedProducts, store_id: storeId }, storeId);
 
     res.json({
       success: true,
-      products: db.products,
-      version: db.version,
+      products: updatedProducts,
+      version: db ? db.version : 1,
     });
   } catch (err: any) {
     console.error('Error in /api/products:', err);
@@ -1666,32 +1709,38 @@ app.post('/api/products', (req: Request, res: Response) => {
 });
 
 // 9b. Bulk Add or Update Products
-app.post('/api/products/bulk', (req: Request, res: Response) => {
+app.post('/api/products/bulk', async (req: Request, res: Response) => {
   try {
-    const { products: newProducts } = req.body;
-    if (!Array.isArray(newProducts) || newProducts.length === 0) {
+    const { products } = req.body;
+    if (!Array.isArray(products) || products.length === 0) {
       return res.status(400).json({ success: false, error: 'Products array required' });
     }
 
-    for (const prod of newProducts) {
+    const storeId = getRequestStoreId(req);
+
+    for (const prod of products) {
       if (!prod || !prod.item_sn) continue;
-      sqliteDb.upsertProduct(prod);
-      const idx = db.products.findIndex(p => p.item_sn === prod.item_sn);
-      if (idx !== -1) {
-        db.products[idx] = { ...db.products[idx], ...prod };
-      } else {
-        db.products.unshift(prod);
+      prod.store_id = storeId;
+      if (pgDb) await pgDb.upsertProduct(prod, storeId);
+      sqliteDb.upsertProduct(prod, storeId);
+      if (Array.isArray(db.products)) {
+        const idx = db.products.findIndex(p => p.item_sn === prod.item_sn);
+        if (idx !== -1) {
+          db.products[idx] = { ...db.products[idx], ...prod };
+        } else {
+          db.products.unshift(prod);
+        }
       }
     }
 
     saveDatabase();
-    broadcast('PRODUCTS_UPDATED', { products: db.products });
+    const updatedProducts = await (pgDb ? pgDb.getTable('products', storeId) : sqliteDb.getTable('products', storeId));
+    broadcast('PRODUCTS_UPDATED', { products: updatedProducts, store_id: storeId }, storeId);
 
     res.json({
       success: true,
-      count: newProducts.length,
-      products: db.products,
-      version: db.version,
+      products: updatedProducts,
+      version: db ? db.version : 1,
     });
   } catch (err: any) {
     console.error('Error in /api/products/bulk:', err);
@@ -2282,13 +2331,14 @@ app.post('/api/settings/discount-pin', (req: Request, res: Response) => {
 });
 
 // 12c. Management Discount Rules (Manager / Admin)
-app.get('/api/discount-rules', (_req: Request, res: Response) => {
+app.get('/api/discount-rules', async (req: Request, res: Response) => {
   try {
-    const discountRules = db.discountRules || sqliteDb.getDiscountRules();
+    const storeId = getRequestStoreId(req);
+    const discountRules = await (pgDb ? pgDb.getTable('discount_rules', storeId) : sqliteDb.getTable('discount_rules', storeId));
     res.json({
       success: true,
       discountRules,
-      version: db.version,
+      version: db ? db.version : 1,
     });
   } catch (err: any) {
     console.error('Error in GET /api/discount-rules:', err);
@@ -2296,274 +2346,113 @@ app.get('/api/discount-rules', (_req: Request, res: Response) => {
   }
 });
 
-app.post('/api/discount-rules', (req: Request, res: Response) => {
+app.post('/api/discount-rules', async (req: Request, res: Response) => {
   try {
-    const { rule, action, staff_id, staff_name, staff_role } = req.body;
+    const storeId = getRequestStoreId(req);
+    const { rule, action } = req.body;
     if (!rule && action !== 'RESET') {
       return res.status(400).json({ success: false, error: 'Rule data is required' });
     }
 
-    if (!Array.isArray(db.discountRules)) {
-      db.discountRules = sqliteDb.getDiscountRules();
-    }
-
-    const staffTitle = staff_name ? `${staff_name} (${staff_role || 'Manager'})` : 'Store Manager';
-
     if (action === 'DELETE') {
       const targetId = rule.rule_id;
-      db.discountRules = db.discountRules.filter((r: any) => r.rule_id !== targetId);
+      if (pgDb) await pgDb.deleteDiscountRule(targetId, storeId);
       sqliteDb.deleteDiscountRule(targetId);
-
-      db.auditLogs.unshift({
-        id: `AUDIT-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
-        timestamp: new Date().toISOString(),
-        staff_id: staff_id || 'STAFF',
-        staff_name: staff_name || 'Staff',
-        staff_role: staff_role || 'Manager',
-        category: 'Discounts',
-        action: 'DISCOUNT_RULE_DELETED',
-        details: `Discount rule "${rule.name || targetId}" removed by ${staffTitle}.`,
-        severity: 'WARNING',
-        hash: `hash_${Date.now()}`,
-      });
-    } else {
-      const ruleId = rule.rule_id || `RULE_${Date.now()}`;
-      const normalizedRule = {
-        ...rule,
-        rule_id: ruleId,
-        name: String(rule.name).trim(),
-        description: String(rule.description || '').trim(),
-        condition_type: rule.condition_type,
-        threshold_value: Number(rule.threshold_value) || 0,
-        discount_type: rule.discount_type,
-        discount_value: Number(rule.discount_value) || 0,
-        scope: rule.scope || 'BASKET',
-        requires_manager_approval: Boolean(rule.requires_manager_approval),
-        max_discount_cap: rule.max_discount_cap ? Number(rule.max_discount_cap) : undefined,
-        is_active: rule.is_active !== false,
-        updated_at: new Date().toISOString(),
-      };
-
-      const existingIdx = db.discountRules.findIndex((r: any) => r.rule_id === ruleId);
-      if (existingIdx !== -1) {
-        db.discountRules[existingIdx] = normalizedRule;
-      } else {
-        db.discountRules.push(normalizedRule);
+      if (Array.isArray(db.discountRules)) {
+        db.discountRules = db.discountRules.filter((r: any) => r.rule_id !== targetId);
       }
-
-      sqliteDb.upsertDiscountRule(normalizedRule);
-
-      db.auditLogs.unshift({
-        id: `AUDIT-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
-        timestamp: new Date().toISOString(),
-        staff_id: staff_id || 'STAFF',
-        staff_name: staff_name || 'Staff',
-        staff_role: staff_role || 'Manager',
-        category: 'Discounts',
-        action: existingIdx !== -1 ? 'DISCOUNT_RULE_UPDATED' : 'DISCOUNT_RULE_CREATED',
-        details: `Discount rule "${normalizedRule.name}" ${existingIdx !== -1 ? 'modified' : 'created'} by ${staffTitle}.`,
-        severity: 'INFO',
-        hash: `hash_${Date.now()}`,
-      });
+    } else if (action === 'RESET') {
+      if (Array.isArray(DEFAULT_MANAGEMENT_DISCOUNT_RULES)) {
+        for (const defaultRule of DEFAULT_MANAGEMENT_DISCOUNT_RULES) {
+          const payload = { ...defaultRule, store_id: storeId };
+          if (pgDb) await pgDb.upsertDiscountRule(payload, storeId);
+          sqliteDb.upsertDiscountRule(payload, storeId);
+        }
+      }
+    } else {
+      const rulePayload = { ...rule, store_id: storeId };
+      if (pgDb) await pgDb.upsertDiscountRule(rulePayload, storeId);
+      sqliteDb.upsertDiscountRule(rulePayload, storeId);
+      if (Array.isArray(db.discountRules)) {
+        const idx = db.discountRules.findIndex((r: any) => r.rule_id === rule.rule_id);
+        if (idx !== -1) {
+          db.discountRules[idx] = rulePayload;
+        } else {
+          db.discountRules.push(rulePayload);
+        }
+      }
     }
 
     saveDatabase();
-    broadcast('DISCOUNT_RULES_UPDATED', { discountRules: db.discountRules });
+    const updatedRules = await (pgDb ? pgDb.getTable('discount_rules', storeId) : sqliteDb.getTable('discount_rules', storeId));
+    broadcast('DISCOUNT_RULES_UPDATED', { discountRules: updatedRules, store_id: storeId }, storeId);
 
     res.json({
       success: true,
-      discountRules: db.discountRules,
-      version: db.version,
+      discountRules: updatedRules,
+      version: db ? db.version : 1,
     });
   } catch (err: any) {
-    console.error('Error in POST /api/discount-rules:', err);
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-// 12d. Dynamic Product Category Management (Supervisor / Manager / Admin)
-app.get('/api/categories', (_req: Request, res: Response) => {
-  try {
-    const categories = db.categories || sqliteDb.getCategories();
-    res.json({
-      success: true,
-      categories,
-      version: db.version,
-    });
-  } catch (err: any) {
-    console.error('Error in GET /api/categories:', err);
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-app.post('/api/categories', (req: Request, res: Response) => {
-  try {
-    const action = req.body.action || 'CREATE';
-    const cat = req.body.category || {};
-    const catId = cat.id || req.body.id || (action === 'CREATE' ? `CAT-${Date.now()}` : undefined);
-    const catName = cat.name !== undefined ? cat.name : req.body.name;
-    const catDesc = cat.description !== undefined ? cat.description : req.body.description;
-    const oldName = req.body.oldName || cat.oldName;
-    const staff_id = req.body.staff_id;
-    const staff_name = req.body.staff_name;
-    const staff_role = req.body.staff_role;
-
-    if (!Array.isArray(db.categories)) {
-      db.categories = sqliteDb.getCategories();
-    }
-
-    const staffTitle = staff_name ? `${staff_name} (${staff_role || 'Staff'})` : 'Authorized Staff';
-    let normalizedCat: any = null;
-
-    if (action === 'DELETE') {
-      const targetId = catId || req.body.id;
-      if (!targetId) {
-        return res.status(400).json({ success: false, error: 'Category ID is required for deletion' });
-      }
-
-      const deletedCat = db.categories.find((c: any) => c.id === targetId);
-      db.categories = db.categories.filter((c: any) => c.id !== targetId);
-      sqliteDb.deleteCategory(targetId);
-
-      const auditEntry = {
-        id: `AUDIT-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
-        timestamp: new Date().toISOString(),
-        staff_id: staff_id || 'STAFF',
-        staff_name: staff_name || 'Staff',
-        staff_role: staff_role || 'Supervisor',
-        category: 'Inventory',
-        action: 'CATEGORY_DELETED',
-        details: `Product Category "${deletedCat?.name || targetId}" removed by ${staffTitle}.`,
-        severity: 'INFO',
-        hash: `hash_${Date.now()}`,
-      };
-      db.auditLogs.unshift(auditEntry);
-      sqliteDb.addAuditLog(auditEntry);
-    } else {
-      if (!catName || !String(catName).trim()) {
-        return res.status(400).json({ success: false, error: 'Category name is required' });
-      }
-
-      const targetId = catId || `CAT-${Date.now()}`;
-      normalizedCat = {
-        ...cat,
-        id: targetId,
-        name: String(catName).trim(),
-        description: catDesc !== undefined ? String(catDesc).trim() : '',
-        created_at: cat.created_at || req.body.created_at || new Date().toISOString(),
-        created_by: staffTitle,
-      };
-
-      const existingIdx = db.categories.findIndex((c: any) => c.id === targetId || c.name.toLowerCase() === normalizedCat.name.toLowerCase());
-      const isRename = existingIdx !== -1 && oldName && oldName !== normalizedCat.name;
-
-      if (existingIdx !== -1) {
-        db.categories[existingIdx] = { ...db.categories[existingIdx], ...normalizedCat };
-      } else {
-        db.categories.push(normalizedCat);
-      }
-      sqliteDb.upsertCategory(normalizedCat);
-
-      // If renamed, update all associated products in inventory & SQLite
-      let updatedProductsCount = 0;
-      if (isRename) {
-        if (!Array.isArray(db.products)) {
-          db.products = sqliteDb.getTable('products');
-        }
-        for (const prod of db.products) {
-          if (prod.product_category === oldName) {
-            prod.product_category = normalizedCat.name;
-            sqliteDb.upsertProduct(prod);
-            updatedProductsCount++;
-          }
-        }
-      }
-
-      const auditEntry = {
-        id: `AUDIT-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
-        timestamp: new Date().toISOString(),
-        staff_id: staff_id || 'STAFF',
-        staff_name: staff_name || 'Staff',
-        staff_role: staff_role || 'Supervisor',
-        category: 'Inventory',
-        action: existingIdx !== -1 ? 'CATEGORY_UPDATED' : 'CATEGORY_CREATED',
-        details: `Category "${normalizedCat.name}" ${existingIdx !== -1 ? 'updated' : 'created'} by ${staffTitle}.${updatedProductsCount > 0 ? ` Updated ${updatedProductsCount} products.` : ''}`,
-        severity: 'SUCCESS',
-        hash: `hash_${Date.now()}`,
-      };
-      db.auditLogs.unshift(auditEntry);
-      sqliteDb.addAuditLog(auditEntry);
-    }
-
-    saveDatabase();
-    sqliteDb.checkpoint('PASSIVE');
-
-    broadcast('CATEGORIES_UPDATED', {
-      categories: db.categories,
-      products: db.products,
-    });
-
-    res.json({
-      success: true,
-      category: normalizedCat,
-      categories: db.categories,
-      products: db.products,
-      version: db.version,
-    });
-  } catch (err: any) {
-    console.error('Error in POST /api/categories:', err);
+    console.error('Error in /api/discount-rules:', err);
     res.status(500).json({ success: false, error: err.message || 'Internal server error' });
   }
 });
 
-// 13. Employees / Staff
-app.get('/api/employees', (_req: Request, res: Response) => {
+// 13. Employees / Staff - Connected directly to Cloud PostgreSQL & SQLite
+app.get('/api/employees', async (req: Request, res: Response) => {
   try {
-    if (!Array.isArray(db.employees)) {
-      db.employees = sqliteDb.getTable('employees');
-    }
+    const storeId = getRequestStoreId(req);
+    const employees = await (pgDb ? pgDb.getTable('employees', storeId) : sqliteDb.getTable('employees', storeId));
     res.json({
       success: true,
-      employees: db.employees,
-      version: db.version,
+      employees,
+      version: db ? db.version : 1,
     });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
   }
 });
 
-app.post('/api/employees', (req: Request, res: Response) => {
+app.post('/api/employees', async (req: Request, res: Response) => {
   try {
     const { employee, action } = req.body;
     if (!employee || !employee.staff_id) {
       return res.status(400).json({ success: false, error: 'Employee data with valid staff_id is required' });
     }
 
-    if (!Array.isArray(db.employees)) {
-      db.employees = sqliteDb.getTable('employees');
-    }
+    const storeId = getRequestStoreId(req, employee);
+    const branchId = getRequestBranchId(req, employee);
+    employee.store_id = storeId;
+    if (!employee.branch_id) employee.branch_id = branchId;
 
     if (action === 'DELETE') {
-      db.employees = db.employees.filter(e => e.staff_id !== employee.staff_id);
+      if (pgDb) await pgDb.deleteEmployee(employee.staff_id, storeId);
       sqliteDb.deleteEmployee(employee.staff_id);
+      if (Array.isArray(db.employees)) {
+        db.employees = db.employees.filter(e => e.staff_id !== employee.staff_id);
+      }
     } else {
-      sqliteDb.upsertEmployee(employee);
-      const idx = db.employees.findIndex(e => e.staff_id === employee.staff_id);
-      if (idx !== -1) {
-        db.employees[idx] = { ...db.employees[idx], ...employee };
-      } else {
-        db.employees.unshift(employee);
+      if (pgDb) await pgDb.upsertEmployee(employee, storeId);
+      sqliteDb.upsertEmployee(employee, storeId);
+      if (Array.isArray(db.employees)) {
+        const idx = db.employees.findIndex(e => e.staff_id === employee.staff_id);
+        if (idx !== -1) {
+          db.employees[idx] = { ...db.employees[idx], ...employee };
+        } else {
+          db.employees.unshift(employee);
+        }
       }
     }
 
     saveDatabase();
     sqliteDb.checkpoint('FULL');
-    broadcast('EMPLOYEES_UPDATED', { employees: db.employees });
+    const updatedEmployees = await (pgDb ? pgDb.getTable('employees', storeId) : sqliteDb.getTable('employees', storeId));
+    broadcast('EMPLOYEES_UPDATED', { employees: updatedEmployees, store_id: storeId }, storeId);
 
     res.json({
       success: true,
-      employees: db.employees,
-      version: db.version,
+      employees: updatedEmployees,
+      version: db ? db.version : 1,
     });
   } catch (err: any) {
     console.error('Error in /api/employees:', err);
@@ -2571,52 +2460,57 @@ app.post('/api/employees', (req: Request, res: Response) => {
   }
 });
 
-// 14. POS Terminal Setup & Account Mapping
-app.get('/api/pos-terminals', (req: Request, res: Response) => {
-  res.json({
-    success: true,
-    posTerminals: db.posTerminals || [],
-    version: db.version,
-  });
+// 14. POS Terminal Setup & Account Mapping - Connected to PostgreSQL & SQLite
+app.get('/api/pos-terminals', async (req: Request, res: Response) => {
+  try {
+    const storeId = getRequestStoreId(req);
+    const posTerminals = await (pgDb ? pgDb.getTable('pos_terminals', storeId) : sqliteDb.getTable('pos_terminals', storeId));
+    res.json({
+      success: true,
+      posTerminals,
+      version: db ? db.version : 1,
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
 });
 
-app.post('/api/pos-terminals', (req: Request, res: Response) => {
+app.post('/api/pos-terminals', async (req: Request, res: Response) => {
   try {
     const { terminal, action } = req.body;
     if (!terminal || !terminal.id) {
       return res.status(400).json({ success: false, error: 'Terminal data required' });
     }
-
-    if (!Array.isArray(db.posTerminals)) {
-      db.posTerminals = [];
-    }
+    const storeId = getRequestStoreId(req, terminal);
+    terminal.store_id = storeId;
 
     if (action === 'DELETE') {
-      db.posTerminals = db.posTerminals.filter(t => t.id !== terminal.id);
+      if (pgDb) await pgDb.deletePosTerminal(terminal.id, storeId);
       sqliteDb.deletePosTerminal(terminal.id);
-    } else {
-      // If marking as default, reset previous default of same type
-      if (terminal.is_default) {
-        db.posTerminals.forEach(t => {
-          if (t.type === terminal.type) t.is_default = false;
-        });
+      if (Array.isArray(db.posTerminals)) {
+        db.posTerminals = db.posTerminals.filter(t => t.id !== terminal.id);
       }
+    } else {
+      if (pgDb) await pgDb.upsertPosTerminal(terminal, storeId);
       sqliteDb.upsertPosTerminal(terminal);
-      const idx = db.posTerminals.findIndex(t => t.id === terminal.id);
-      if (idx !== -1) {
-        db.posTerminals[idx] = { ...db.posTerminals[idx], ...terminal };
-      } else {
-        db.posTerminals.unshift(terminal);
+      if (Array.isArray(db.posTerminals)) {
+        const idx = db.posTerminals.findIndex(t => t.id === terminal.id);
+        if (idx !== -1) {
+          db.posTerminals[idx] = { ...db.posTerminals[idx], ...terminal };
+        } else {
+          db.posTerminals.unshift(terminal);
+        }
       }
     }
 
     saveDatabase();
-    broadcast('POS_TERMINALS_UPDATED', { posTerminals: db.posTerminals });
+    const updatedTerminals = await (pgDb ? pgDb.getTable('pos_terminals', storeId) : sqliteDb.getTable('pos_terminals', storeId));
+    broadcast('POS_TERMINALS_UPDATED', { posTerminals: updatedTerminals, store_id: storeId }, storeId);
 
     res.json({
       success: true,
-      posTerminals: db.posTerminals,
-      version: db.version,
+      posTerminals: updatedTerminals,
+      version: db ? db.version : 1,
     });
   } catch (err: any) {
     console.error('Error in /api/pos-terminals:', err);
@@ -2624,68 +2518,85 @@ app.post('/api/pos-terminals', (req: Request, res: Response) => {
   }
 });
 
-app.delete('/api/pos-terminals/:id', (req: Request, res: Response) => {
+app.delete('/api/pos-terminals/:id', async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     if (!id) return res.status(400).json({ success: false, error: 'ID required' });
+    const storeId = getRequestStoreId(req);
 
-    if (!Array.isArray(db.posTerminals)) db.posTerminals = [];
-    db.posTerminals = db.posTerminals.filter(t => t.id !== id);
+    if (pgDb) await pgDb.deletePosTerminal(id, storeId);
     sqliteDb.deletePosTerminal(id);
+    if (Array.isArray(db.posTerminals)) {
+      db.posTerminals = db.posTerminals.filter(t => t.id !== id);
+    }
 
     saveDatabase();
-    broadcast('POS_TERMINALS_UPDATED', { posTerminals: db.posTerminals });
+    const updatedTerminals = await (pgDb ? pgDb.getTable('pos_terminals', storeId) : sqliteDb.getTable('pos_terminals', storeId));
+    broadcast('POS_TERMINALS_UPDATED', { posTerminals: updatedTerminals, store_id: storeId }, storeId);
 
     res.json({
       success: true,
-      posTerminals: db.posTerminals,
-      version: db.version,
+      posTerminals: updatedTerminals,
+      version: db ? db.version : 1,
     });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
   }
 });
 
-// 14b. Suppliers Management
-app.get('/api/suppliers', (req: Request, res: Response) => {
-  res.json({
-    success: true,
-    suppliers: db.suppliers || [],
-    version: db.version,
-  });
+// 14b. Suppliers Management - Connected to PostgreSQL & SQLite
+app.get('/api/suppliers', async (req: Request, res: Response) => {
+  try {
+    const storeId = getRequestStoreId(req);
+    const suppliers = await (pgDb ? pgDb.getTable('suppliers', storeId) : sqliteDb.getTable('suppliers', storeId));
+    res.json({
+      success: true,
+      suppliers,
+      version: db ? db.version : 1,
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
 });
 
-app.post('/api/suppliers', (req: Request, res: Response) => {
+app.post('/api/suppliers', async (req: Request, res: Response) => {
   try {
     const { supplier, action } = req.body;
     if (!supplier || (!supplier.supplier_id && !supplier.id)) {
       return res.status(400).json({ success: false, error: 'Supplier data required' });
     }
+    const storeId = getRequestStoreId(req, supplier);
     const sId = supplier.supplier_id || supplier.id;
     supplier.supplier_id = sId;
-
-    if (!Array.isArray(db.suppliers)) db.suppliers = [];
+    supplier.store_id = storeId;
 
     if (action === 'DELETE') {
-      db.suppliers = db.suppliers.filter(s => s.supplier_id !== sId);
+      if (pgDb) await pgDb.deleteSupplier(sId, storeId);
       sqliteDb.deleteSupplier(sId);
+      if (Array.isArray(db.suppliers)) {
+        db.suppliers = db.suppliers.filter(s => s.supplier_id !== sId);
+      }
     } else {
-      sqliteDb.upsertSupplier(supplier);
-      const idx = db.suppliers.findIndex(s => s.supplier_id === sId);
-      if (idx !== -1) {
-        db.suppliers[idx] = { ...db.suppliers[idx], ...supplier };
-      } else {
-        db.suppliers.unshift(supplier);
+      if (pgDb) await pgDb.upsertSupplier(supplier, storeId);
+      sqliteDb.upsertSupplier(supplier, storeId);
+      if (Array.isArray(db.suppliers)) {
+        const idx = db.suppliers.findIndex(s => s.supplier_id === sId);
+        if (idx !== -1) {
+          db.suppliers[idx] = { ...db.suppliers[idx], ...supplier };
+        } else {
+          db.suppliers.unshift(supplier);
+        }
       }
     }
 
     saveDatabase();
-    broadcast('SUPPLIERS_UPDATED', { suppliers: db.suppliers });
+    const updatedSuppliers = await (pgDb ? pgDb.getTable('suppliers', storeId) : sqliteDb.getTable('suppliers', storeId));
+    broadcast('SUPPLIERS_UPDATED', { suppliers: updatedSuppliers, store_id: storeId }, storeId);
 
     res.json({
       success: true,
-      suppliers: db.suppliers,
-      version: db.version,
+      suppliers: updatedSuppliers,
+      version: db ? db.version : 1,
     });
   } catch (err: any) {
     console.error('Error in /api/suppliers:', err);
@@ -2693,22 +2604,26 @@ app.post('/api/suppliers', (req: Request, res: Response) => {
   }
 });
 
-app.delete('/api/suppliers/:id', (req: Request, res: Response) => {
+app.delete('/api/suppliers/:id', async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     if (!id) return res.status(400).json({ success: false, error: 'ID required' });
+    const storeId = getRequestStoreId(req);
 
+    if (pgDb) await pgDb.deleteSupplier(id, storeId);
     sqliteDb.deleteSupplier(id);
-    if (!Array.isArray(db.suppliers)) db.suppliers = [];
-    db.suppliers = db.suppliers.filter(s => s.supplier_id !== id);
+    if (Array.isArray(db.suppliers)) {
+      db.suppliers = db.suppliers.filter(s => s.supplier_id !== id);
+    }
 
     saveDatabase();
-    broadcast('SUPPLIERS_UPDATED', { suppliers: db.suppliers });
+    const updatedSuppliers = await (pgDb ? pgDb.getTable('suppliers', storeId) : sqliteDb.getTable('suppliers', storeId));
+    broadcast('SUPPLIERS_UPDATED', { suppliers: updatedSuppliers, store_id: storeId }, storeId);
 
     res.json({
       success: true,
-      suppliers: db.suppliers,
-      version: db.version,
+      suppliers: updatedSuppliers,
+      version: db ? db.version : 1,
     });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
@@ -2778,52 +2693,45 @@ app.post('/api/upload-image', async (req: Request, res: Response) => {
   }
 });
 
-// 14d. Receipt & Branding Customization Settings
-app.get('/api/receipt-settings', (req: Request, res: Response) => {
-  const settings = sqliteDb.getReceiptSettings() || db.receiptSettings;
-  res.json({
-    success: true,
-    settings,
-    version: db.version,
-  });
+// 14d. Receipt & Branding Customization Settings - Connected to PostgreSQL & SQLite
+app.get('/api/receipt-settings', async (req: Request, res: Response) => {
+  try {
+    const storeId = getRequestStoreId(req);
+    const settings = await (pgDb ? pgDb.getReceiptSettings(storeId) : sqliteDb.getReceiptSettings(storeId));
+    res.json({
+      success: true,
+      settings,
+      version: db ? db.version : 1,
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
 });
 
-app.post('/api/receipt-settings', requireAuth, (req: Request, res: Response) => {
+app.post('/api/receipt-settings', requireAuth, async (req: Request, res: Response) => {
   try {
+    const storeId = getRequestStoreId(req);
     const { settings } = req.body;
     if (!settings) {
       return res.status(400).json({ success: false, error: 'Receipt settings payload required' });
     }
 
+    settings.store_id = storeId;
+    if (pgDb) await pgDb.upsertReceiptSettings(settings, storeId);
+    sqliteDb.upsertReceiptSettings(settings, storeId);
     db.receiptSettings = settings;
-    sqliteDb.upsertReceiptSettings(settings);
-
-    // Record audit trail entry
-    const auditEntry = {
-      id: `AUD-${Date.now().toString().slice(-6)}`,
-      timestamp: new Date().toISOString(),
-      staff_id: (req as any).user?.staffId || 'ADMIN',
-      staff_name: settings.updated_by_staff_name || 'Manager/Admin',
-      role: (req as any).user?.role || 'Admin',
-      category: 'Administration',
-      action: 'RECEIPT_SETTINGS_UPDATED',
-      details: `Receipt branding updated by ${settings.updated_by_staff_name || 'Admin'}. Business: "${settings.business_name}", Logo: ${settings.logo_base64 ? 'Active' : 'None'}, Roll: ${settings.paper_width}.`,
-      severity: 'INFO',
-    };
-    db.auditLogs.unshift(auditEntry);
-    sqliteDb.addAuditLog(auditEntry);
 
     saveDatabase(db);
     broadcast('RECEIPT_SETTINGS_UPDATED', {
-      version: db.version,
-      settings: db.receiptSettings,
-      auditEntry,
-    });
+      version: db ? db.version : 1,
+      settings,
+      store_id: storeId,
+    }, storeId);
 
     res.json({
       success: true,
-      settings: db.receiptSettings,
-      version: db.version,
+      settings,
+      version: db ? db.version : 1,
     });
   } catch (err: any) {
     console.error('Error in /api/receipt-settings:', err);

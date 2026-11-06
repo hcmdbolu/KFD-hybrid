@@ -1134,7 +1134,7 @@ export const PosProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     // Polling fallback every 3.5s to ensure guaranteed multi-terminal consistency
     const pollInterval = setInterval(async () => {
       try {
-        const res = await fetch(`/api/poll?version=${serverVersionRef.current}`);
+        const res = await fetch(getApiUrl(`/api/poll?version=${serverVersionRef.current}`));
         if (res.ok) {
           const pollData = await res.json();
           setIsOnline(true);
@@ -2264,7 +2264,7 @@ export const PosProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
 
     // 7. PUSH TO CENTRAL SERVER DATABASE (Broadcasts instantly to all Admins & Supervisors)
-    fetch('/api/sales', {
+    fetch(getApiUrl('/api/sales'), {
       method: 'POST',
       headers: getAuthHeaders(),
       body: JSON.stringify({ transaction: newTransaction }),
@@ -2520,7 +2520,7 @@ export const PosProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
 
     // Push to server
-    fetch('/api/orders/void', {
+    fetch(getApiUrl('/api/orders/void'), {
       method: 'POST',
       headers: getAuthHeaders(),
       body: JSON.stringify({ voidRecord }),
@@ -2892,7 +2892,7 @@ export const PosProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
 
     // 5. PUSH TO SERVER DATABASE
-    fetch('/api/refunds', {
+    fetch(getApiUrl('/api/refunds'), {
       method: 'POST',
       headers: getAuthHeaders(),
       body: JSON.stringify({ refund: newRefund }),
@@ -3377,7 +3377,7 @@ export const PosProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
     });
 
-    fetch('/api/cash-transfers', {
+    fetch(getApiUrl('/api/cash-transfers'), {
       method: 'POST',
       headers: getAuthHeaders(),
       body: JSON.stringify({ transfer: newTransfer }),
@@ -3424,7 +3424,7 @@ export const PosProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       metadata: { terminal_id: id, name: newTerminal.name }
     });
 
-    fetch('/api/pos-terminals', {
+    fetch(getApiUrl('/api/pos-terminals'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ terminal: newTerminal }),
@@ -3452,7 +3452,7 @@ export const PosProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
 
     if (updatedObj) {
-      fetch('/api/pos-terminals', {
+      fetch(getApiUrl('/api/pos-terminals'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ terminal: updatedObj }),
@@ -3462,7 +3462,7 @@ export const PosProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const deletePosTerminal = (id: string) => {
     setPosTerminals(prev => prev.filter(t => t.id !== id));
-    fetch(`/api/pos-terminals/${id}`, { method: 'DELETE' })
+    fetch(getApiUrl(`/api/pos-terminals/${id}`), { method: 'DELETE' })
       .catch(err => console.warn('[Central DB] Failed to delete pos terminal:', err));
   };
 
@@ -3492,7 +3492,7 @@ export const PosProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
 
     try {
-      await fetch('/api/receipt-settings', {
+      await fetch(getApiUrl('/api/receipt-settings'), {
         method: 'POST',
         headers: getAuthHeaders(),
         body: JSON.stringify({ settings: newConfig }),
@@ -3569,7 +3569,7 @@ export const PosProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
 
     // PUSH TO CENTRAL SERVER DATABASE
-    fetch('/api/cycle-counts', {
+    fetch(getApiUrl('/api/cycle-counts'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ countRecord, adjustStock: data.adjustStock }),
@@ -3662,7 +3662,7 @@ export const PosProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
 
     // PUSH TO CENTRAL SERVER DATABASE
-    fetch('/api/transfers', {
+    fetch(getApiUrl('/api/transfers'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ transferRecord }),
@@ -3689,7 +3689,7 @@ export const PosProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       severity: 'SUCCESS',
     });
 
-    fetch('/api/products', {
+    fetch(getApiUrl('/api/products'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ product: newProduct }),
@@ -3738,7 +3738,7 @@ export const PosProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
 
     // Sync to server
-    fetch('/api/products/bulk', {
+    fetch(getApiUrl('/api/products/bulk'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ products: createdProducts }),
@@ -3746,7 +3746,7 @@ export const PosProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       .catch(() => {
         // Fallback: send individually if bulk endpoint not available
         createdProducts.forEach(prod => {
-          fetch('/api/products', {
+          fetch(getApiUrl('/api/products'), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ product: prod }),
@@ -3776,7 +3776,7 @@ export const PosProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
 
     if (updatedProd) {
-      fetch('/api/products', {
+      fetch(getApiUrl('/api/products'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ product: updatedProd }),
@@ -3795,7 +3795,7 @@ export const PosProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       severity: 'WARNING',
     });
 
-    fetch('/api/products', {
+    fetch(getApiUrl('/api/products'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ product: { item_sn }, action: 'DELETE' }),
@@ -3853,7 +3853,7 @@ export const PosProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     policyUpdates?: Partial<DiscountSecurityConfig>
   ): Promise<{ success: boolean; error?: string }> => {
     try {
-      const res = await fetch('/api/settings/discount-pin', {
+      const res = await fetch(getApiUrl('/api/settings/discount-pin'), {
         method: 'POST',
         headers: getAuthHeaders(),
         body: JSON.stringify({
@@ -3892,7 +3892,7 @@ export const PosProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const upsertDiscountRule = async (rule: Partial<DiscountRule>): Promise<{ success: boolean; error?: string }> => {
     try {
-      const res = await fetch('/api/discount-rules', {
+      const res = await fetch(getApiUrl('/api/discount-rules'), {
         method: 'POST',
         headers: getAuthHeaders(),
         body: JSON.stringify({
@@ -3919,7 +3919,7 @@ export const PosProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const deleteDiscountRule = async (ruleId: string): Promise<{ success: boolean; error?: string }> => {
     try {
-      const res = await fetch('/api/discount-rules', {
+      const res = await fetch(getApiUrl('/api/discount-rules'), {
         method: 'POST',
         headers: getAuthHeaders(),
         body: JSON.stringify({
@@ -4071,7 +4071,7 @@ export const PosProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       severity: 'SUCCESS',
     });
 
-    fetch(`/api/customers/${customerId}/discount`, {
+    fetch(getApiUrl(`/api/customers/${customerId}/discount`), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -4119,7 +4119,7 @@ export const PosProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       severity: 'INFO',
     });
 
-    fetch('/api/customers', {
+    fetch(getApiUrl('/api/customers'), {
       method: 'POST',
       headers: getAuthHeaders(),
       body: JSON.stringify({ customer: newCustomer }),
@@ -4141,7 +4141,7 @@ export const PosProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     );
 
     if (updatedCust) {
-      fetch('/api/customers', {
+      fetch(getApiUrl('/api/customers'), {
         method: 'POST',
         headers: getAuthHeaders(),
         body: JSON.stringify({ customer: updatedCust }),
@@ -4152,7 +4152,7 @@ export const PosProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const deleteCustomer = (customer_id: string) => {
     const cust = customers.find(c => c.customer_id === customer_id);
     setCustomers(prev => prev.filter(c => c.customer_id !== customer_id));
-    fetch('/api/customers', {
+    fetch(getApiUrl('/api/customers'), {
       method: 'POST',
       headers: getAuthHeaders(),
       body: JSON.stringify({ customer: { customer_id }, action: 'DELETE' }),
@@ -4285,7 +4285,7 @@ export const PosProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
 
     try {
-      const res = await fetch('/api/customers/settle-debt', {
+      const res = await fetch(getApiUrl('/api/customers/settle-debt'), {
         method: 'POST',
         headers: getAuthHeaders(),
         body: JSON.stringify({
@@ -4329,7 +4329,7 @@ export const PosProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     try {
-      const res = await fetch('/api/categories', {
+      const res = await fetch(getApiUrl('/api/categories'), {
         method: 'POST',
         headers: getAuthHeaders(),
         body: JSON.stringify({
@@ -4378,7 +4378,7 @@ export const PosProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const oldName = existing?.name;
 
     try {
-      const res = await fetch('/api/categories', {
+      const res = await fetch(getApiUrl('/api/categories'), {
         method: 'POST',
         headers: getAuthHeaders(),
         body: JSON.stringify({
@@ -4426,7 +4426,7 @@ export const PosProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     try {
-      const res = await fetch('/api/categories', {
+      const res = await fetch(getApiUrl('/api/categories'), {
         method: 'POST',
         headers: getAuthHeaders(),
         body: JSON.stringify({
@@ -4479,7 +4479,7 @@ export const PosProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       severity: 'INFO',
     });
 
-    fetch('/api/suppliers', {
+    fetch(getApiUrl('/api/suppliers'), {
       method: 'POST',
       headers: getAuthHeaders(),
       body: JSON.stringify({ supplier: newSupplier }),
@@ -4501,7 +4501,7 @@ export const PosProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     );
 
     if (updatedSupp) {
-      fetch('/api/suppliers', {
+      fetch(getApiUrl('/api/suppliers'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ supplier: updatedSupp }),
@@ -4511,7 +4511,7 @@ export const PosProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const deleteSupplier = (supplier_id: string) => {
     setSuppliers(prev => prev.filter(s => s.supplier_id !== supplier_id));
-    fetch(`/api/suppliers/${supplier_id}`, {
+    fetch(getApiUrl(`/api/suppliers/${supplier_id}`), {
       method: 'DELETE',
     }).catch(err => console.warn('[Central DB] Failed to delete supplier:', err));
     addAuditLogInternal({
@@ -4612,7 +4612,7 @@ export const PosProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
 
     try {
-      const res = await fetch('/api/purchase-orders', {
+      const res = await fetch(getApiUrl('/api/purchase-orders'), {
         method: 'POST',
         headers: getAuthHeaders(),
         body: JSON.stringify({ po: newPO, action: 'CREATE' }),
@@ -4721,7 +4721,7 @@ export const PosProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     try {
       const targetPoObj = purchaseOrders.find(p => p.po_id === po_id);
-      const res = await fetch('/api/purchase-orders', {
+      const res = await fetch(getApiUrl('/api/purchase-orders'), {
         method: 'POST',
         headers: getAuthHeaders(),
         body: JSON.stringify({
@@ -4860,7 +4860,7 @@ export const PosProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
 
     if (po) {
-      fetch('/api/purchase-orders', {
+      fetch(getApiUrl('/api/purchase-orders'), {
         method: 'POST',
         headers: getAuthHeaders(),
         body: JSON.stringify({ po_id, po, action: 'CANCEL' }),
@@ -4889,7 +4889,7 @@ export const PosProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
 
     try {
-      await fetch(`/api/purchase-orders/${po_id}`, {
+      await fetch(getApiUrl(`/api/purchase-orders/${po_id}`), {
         method: 'DELETE',
         headers: getAuthHeaders(),
       });
@@ -4901,7 +4901,7 @@ export const PosProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   // -------------------------------------------------------------
-  // STAFF MANAGEMENT (Admin Only)
+  // STAFF MANAGEMENT (Admin Only) - Scoped to Store & Branch
   // -------------------------------------------------------------
   const addStaff = async (staffData: Omit<Employee, 'staff_id'>): Promise<Employee> => {
     const staff_id = getNextStaffId();
@@ -4909,6 +4909,8 @@ export const PosProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const newStaff: Employee = {
       ...staffData,
       staff_id,
+      store_id: currentStoreId,
+      branch_id: currentBranchId,
       pin: pinToStore,
     };
     
@@ -4927,7 +4929,7 @@ export const PosProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
 
     try {
-      const res = await fetch('/api/employees', {
+      const res = await fetch(getApiUrl('/api/employees'), {
         method: 'POST',
         headers: getAuthHeaders(),
         body: JSON.stringify({ employee: newStaff }),
@@ -4954,7 +4956,7 @@ export const PosProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setEmployees(prev => {
       const updated = prev.map(e => {
         if (e.staff_id === staff_id) {
-          updatedStaff = { ...e, ...sanitizedUpdates };
+          updatedStaff = { ...e, ...sanitizedUpdates, store_id: currentStoreId, branch_id: currentBranchId };
           return updatedStaff;
         }
         return e;
@@ -4972,7 +4974,7 @@ export const PosProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     if (updatedStaff) {
       try {
-        const res = await fetch('/api/employees', {
+        const res = await fetch(getApiUrl('/api/employees'), {
           method: 'POST',
           headers: getAuthHeaders(),
           body: JSON.stringify({ employee: updatedStaff }),
@@ -5011,10 +5013,10 @@ export const PosProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
 
     try {
-      const res = await fetch('/api/employees', {
+      const res = await fetch(getApiUrl('/api/employees'), {
         method: 'POST',
         headers: getAuthHeaders(),
-        body: JSON.stringify({ employee: { staff_id }, action: 'DELETE' }),
+        body: JSON.stringify({ employee: { staff_id, store_id: currentStoreId }, action: 'DELETE' }),
       });
       const data = await res.json();
       if (res.ok && data.employees) {
@@ -5360,7 +5362,7 @@ export const PosProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       // 7. Request Server to execute backend SQLite wipe and broadcast update
       try {
-        const res = await fetch('/api/admin/factory-reset', {
+        const res = await fetch(getApiUrl('/api/admin/factory-reset'), {
           method: 'POST',
           headers: getAuthHeaders(),
           body: JSON.stringify({
@@ -5411,7 +5413,7 @@ export const PosProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     config: import('../types').LegacyMigrationConfig
   ): Promise<import('../types').LegacyMigrationBatchResult> => {
     try {
-      const res = await fetch('/api/migration/import-sales', {
+      const res = await fetch(getApiUrl('/api/migration/import-sales'), {
         method: 'POST',
         headers: getAuthHeaders(),
         body: JSON.stringify({ batch, config }),
@@ -5455,7 +5457,7 @@ export const PosProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // Terminal Fleet Management Methods
   const fetchFleetTerminals = useCallback(async (): Promise<FleetTerminal[]> => {
     try {
-      const res = await fetch('/api/v1/terminals/fleet', {
+      const res = await fetch(getApiUrl('/api/v1/terminals/fleet'), {
         headers: { 'x-store-id': currentStoreId },
       });
       if (res.ok) {
@@ -5475,7 +5477,7 @@ export const PosProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   ): Promise<boolean> => {
     try {
       const headers = getAuthHeaders();
-      const res = await fetch(`/api/v1/terminals/${encodeURIComponent(terminalId)}/lock`, {
+      const res = await fetch(getApiUrl(`/api/v1/terminals/${encodeURIComponent(terminalId)}/lock`), {
         method: 'POST',
         headers,
         body: JSON.stringify({ locked, reason, store_id: currentStoreId }),

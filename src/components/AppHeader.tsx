@@ -272,68 +272,78 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
 
         {/* Right Controls: Store Selector, Sync Badge, Alerts, Staff, Screen Lock */}
         <div className="flex items-center space-x-2 text-xs shrink-0">
-          {/* Active Store / Tenant Dropdown */}
+          {/* Active Store / Tenant Dropdown - Strict Tenant Scoping */}
           <div className="relative" ref={dropdownRef}>
             <button
               type="button"
               onClick={() => setIsStoreDropdownOpen(!isStoreDropdownOpen)}
               className="flex items-center space-x-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 px-2.5 py-1.5 rounded-xl border border-slate-200 text-[11px] font-medium transition-colors"
-              title="Active Business Store / Tenant"
+              title={activeStaff.role === 'Super Admin' ? "Super Admin Store Switcher" : "Current Business Store"}
             >
               <Building2 className="w-3.5 h-3.5 text-cyan-600 shrink-0" />
               <span className="font-semibold max-w-[120px] truncate">{storeDisplayName}</span>
-              <ChevronDown className="w-3 h-3 text-slate-500 shrink-0" />
+              {(activeStaff.role === 'Super Admin' || (currentTenantObj?.branches && currentTenantObj.branches.length > 1)) && (
+                <ChevronDown className="w-3 h-3 text-slate-500 shrink-0" />
+              )}
             </button>
 
             {isStoreDropdownOpen && (
               <div className="absolute right-0 mt-1.5 w-64 bg-slate-900 border border-slate-700 rounded-xl shadow-2xl p-2 z-50 animate-fadeIn text-xs">
-                <div className="px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-slate-400 border-b border-slate-800 mb-1">
-                  Active Stores & Branches
-                </div>
-                
-                <div className="max-h-48 overflow-y-auto space-y-1">
-                  {tenantsList.length === 0 ? (
-                    <div
-                      onClick={() => {
-                        setCurrentStoreId('store_default');
-                        setIsStoreDropdownOpen(false);
-                      }}
-                      className="flex items-center justify-between p-2 rounded-lg bg-slate-800 text-white cursor-pointer"
-                    >
-                      <div>
-                        <div className="font-semibold">{storeDisplayName}</div>
-                        <div className="text-[10px] text-cyan-400 font-mono">store_default</div>
-                      </div>
-                      <Check className="w-4 h-4 text-emerald-400" />
+                {activeStaff.role === 'Super Admin' ? (
+                  <>
+                    <div className="px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-slate-400 border-b border-slate-800 mb-1">
+                      All SaaS Stores (Super Admin)
                     </div>
-                  ) : (
-                    tenantsList.map(t => {
-                      const isCurrent = t.store_id === currentStoreId;
-                      return (
+                    
+                    <div className="max-h-48 overflow-y-auto space-y-1">
+                      {tenantsList.length === 0 ? (
                         <div
-                          key={t.store_id}
                           onClick={() => {
-                            setCurrentStoreId(t.store_id);
-                            triggerOutboxFlush();
-                            forceSync();
+                            setCurrentStoreId('store_default');
                             setIsStoreDropdownOpen(false);
                           }}
-                          className={`flex items-center justify-between p-2 rounded-lg cursor-pointer transition-colors ${
-                            isCurrent ? 'bg-cyan-950/80 border border-cyan-500/50 text-white' : 'hover:bg-slate-800 text-slate-300'
-                          }`}
+                          className="flex items-center justify-between p-2 rounded-lg bg-slate-800 text-white cursor-pointer"
                         >
-                          <div className="min-w-0 pr-2">
-                            <div className="font-semibold truncate">{t.business_name}</div>
-                            <div className="text-[10px] text-slate-400 font-mono truncate">
-                              {t.store_id} • {t.vertical}
-                            </div>
+                          <div>
+                            <div className="font-semibold">{storeDisplayName}</div>
+                            <div className="text-[10px] text-cyan-400 font-mono">store_default</div>
                           </div>
-                          {isCurrent && <Check className="w-4 h-4 text-cyan-400 shrink-0" />}
+                          <Check className="w-4 h-4 text-emerald-400" />
                         </div>
-                      );
-                    })
-                  )}
-                </div>
+                      ) : (
+                        tenantsList.map(t => {
+                          const isCurrent = t.store_id === currentStoreId;
+                          return (
+                            <div
+                              key={t.store_id}
+                              onClick={() => {
+                                setCurrentStoreId(t.store_id);
+                                triggerOutboxFlush();
+                                forceSync();
+                                setIsStoreDropdownOpen(false);
+                              }}
+                              className={`flex items-center justify-between p-2 rounded-lg cursor-pointer transition-colors ${
+                                isCurrent ? 'bg-cyan-950/80 border border-cyan-500/50 text-white' : 'hover:bg-slate-800 text-slate-300'
+                              }`}
+                            >
+                              <div className="min-w-0 pr-2">
+                                <div className="font-semibold truncate">{t.business_name}</div>
+                                <div className="text-[10px] text-slate-400 font-mono truncate">
+                                  {t.store_id} • {t.vertical}
+                                </div>
+                              </div>
+                              {isCurrent && <Check className="w-4 h-4 text-cyan-400 shrink-0" />}
+                            </div>
+                          );
+                        })
+                      )}
+                    </div>
+                  </>
+                ) : (
+                  <div className="px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-slate-400 border-b border-slate-800 mb-1">
+                    Store Branches
+                  </div>
+                )}
 
                 {currentTenantObj?.branches && currentTenantObj.branches.length > 0 && (
                   <div className="mt-2 pt-1.5 border-t border-slate-800">
